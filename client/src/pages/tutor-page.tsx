@@ -1,0 +1,1082 @@
+import { useAuth } from "@/hooks/use-auth";
+import { useEffect, useState, useRef } from "react";
+import { TutorErrorBoundary } from "@/components/tutor-error-boundary";
+import { NetworkAwareWrapper } from "@/components/network-aware-wrapper";
+import ConvaiHost, { type ConvaiMessage } from "@/components/convai-host";
+import { ConvaiTranscript } from "@/components/convai-transcript";
+import { RealtimeVoiceHost, type RealtimeVoiceHostHandle } from "@/components/realtime-voice-host";
+import { AssignmentsPanel } from "@/components/AssignmentsPanel";
+import { StudentSwitcher } from "@/components/StudentSwitcher";
+import { StudentProfilePanel } from "@/components/StudentProfilePanel";
+import { VerificationBanner } from "@/components/VerificationBanner";
+import { AGENTS, GREETINGS, type AgentLevel } from "@/agents";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useQuery } from "@tanstack/react-query";
+import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
+import { Clock, AlertCircle, Upload, File, X, Paperclip, BookOpen, GraduationCap, ChevronRight, ChevronDown, Mic, Headphones, Type } from "lucide-react";
+import { NavigationHeader } from "@/components/navigation-header";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { SUPPORTED_LANGUAGES } from "@shared/languages";
+import { Card, CardContent } from "@/components/ui/card";
+import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
+import suLogo from '@/assets/state-university-logo.png';
+import { AmbientBackground } from '@/components/AmbientBackground';
+import { HeroBanner } from '@/components/HeroBanner';
+import { SessionFeedback } from '@/components/SessionFeedback';
+import { FeedbackWidget } from '@/components/FeedbackWidget';
+import tutorHero from "@/assets/tutor-hero.png";
+
+interface ProgressData {
+  lastLevel?: string;
+  lastSubject?: string;
+  lastSummary?: string;
+  updatedAt?: string;
+}
+
+const loadProgress = (): ProgressData => {
+  try {
+    const saved = localStorage.getItem('jie-tutor-progress');
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+};
+
+const saveProgress = (data: ProgressData) => {
+  try {
+    localStorage.setItem('jie-tutor-progress', JSON.stringify(data));
+  } catch {
+    // Ignore storage errors
+  }
+};
+
+// Map full language names to ISO codes for voice API
+const mapLanguageToISO = (language?: string | null): 'en' | 'es' | 'hi' | 'zh' => {
+  if (!language) return 'en';
+  
+  const lang = language.toLowerCase();
+  switch (lang) {
+    case 'spanish':
+      return 'es';
+    case 'hindi':
+      return 'hi';
+    case 'chinese':
+      return 'zh';
+    case 'english':
+    default:
+      return 'en';
+  }
+};
+
+export default function TutorPage() {
+  const { user, logoutMutation } = useAuth();
+  const { toast } = useToast();
+  const [, setLocation] = useLocation();
+  const [scriptReady, setScriptReady] = useState(false);
+
+  const memo = loadProgress();
+  const [level, setLevel] = useState<AgentLevel>((memo.lastLevel as AgentLevel) || "college");
+  const [subject, setSubject] = useState(memo.lastSubject || "general");
+  const [studentName, setStudentName] = useState("");
+  const [gradeText, setGradeText] = useState("");
+  const [mounted, setMounted] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [sessionState, setSessionState] = useState<'idle' | 'starting' | 'active' | 'ending'>('idle');
+  const [sessionMode, setSessionMode] = useState<'voice' | 'hybrid' | 'text'>(() => {
+    try {
+      const saved = localStorage.getItem('preferred-communication-mode');
+      if (saved === 'voice' || saved === 'hybrid' || saved === 'text') return saved;
+    } catch {}
+    return 'voice';
+  });
+  const voiceHostRef = useRef<RealtimeVoiceHostHandle>(null);
+  const [lastSummary, setLastSummary] = useState(memo.lastSummary || "");
+  const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
+  const [profileDrawerOpen, setProfileDrawerOpen] = useState(false);
+  const [editingStudentId, setEditingStudentId] = useState<string | undefined>();
+  const [transcriptMessages, setTranscriptMessages] = useState<ConvaiMessage[]>([]);
+  const [isTranscriptConnected, setIsTranscriptConnected] = useState(false);
+  const [selectedLanguage, setSelectedLanguage] = useState<string>(() => {
+    try {
+      return localStorage.getItem('jie-tutor-language') || 'en';
+    } catch {
+      return 'en';
+    }
+  });
+
+  // Practice lesson context
+  const [activeLessonId, setActiveLessonId] = useState<string | null>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('lessonId');
+  });
+
+  // Debug state for Realtime debugging
+  const [debugInfo, setDebugInfo] = useState<{
+    transport?: string;
+    sessionStatus?: string;
+    lastError?: any;
+    helloProbeStatus?: string;
+    vadEnabled?: boolean;
+    modelName?: string;
+    connectionStatus?: 'connecting' | 'connected' | 'disconnected' | 'error';
+    lastEvent?: string;
+  }>({});
+
+  // Sync student name and grade when user loads
+  useEffect(() => {
+    if (user?.studentName) {
+      setStudentName(user.studentName);
+    }
+    if (user?.gradeLevel) {
+      setGradeText(user.gradeLevel);
+    }
+  }, [user]);
+  
+  // Session tracking state
+  const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null);
+  
+  
+  // Document selection state
+  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+  
+  // Save language preference to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('jie-tutor-language', selectedLanguage);
+    } catch {
+      // Ignore storage errors
+    }
+  }, [selectedLanguage]);
+
+  // Meta Pixel: Track minute top-up purchase on successful checkout redirect
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const topupSuccess = params.get('topup');
+    
+    if (topupSuccess === 'success' && typeof window !== 'undefined' && (window as any).fbq) {
+      // Top-up is $19.99 for 60 minutes
+      (window as any).fbq('track', 'Purchase', {
+        value: 19.99,
+        currency: 'USD',
+        content_name: '60 minute top-up',
+        content_type: 'minutes'
+      });
+      console.log('[Meta Pixel] Purchase event tracked for minute top-up');
+      
+      // Clean up URL param (prevent duplicate tracking on refresh)
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, '', newUrl);
+    }
+  }, []);
+
+  // Fetch available minutes
+  const { data: minutesData } = useQuery<{
+    total: number;
+    used: number;
+    remaining: number;
+    bonusMinutes: number;
+  }>({
+    queryKey: ['/api/session/check-availability'],
+    queryFn: async () => {
+      const response = await apiRequest('POST', '/api/session/check-availability', {});
+      return response.json();
+    },
+    enabled: !!user,
+    refetchInterval: 30000, // Refresh every 30 seconds
+  });
+
+  // Fetch voice system configuration
+  const { data: systemConfig } = useQuery<{ useConvai: boolean }>({
+    queryKey: ['/api/health'],
+    queryFn: async () => {
+      const response = await fetch('/api/health');
+      return response.json();
+    },
+  });
+
+  const useConvai = systemConfig?.useConvai ?? true; // Default to ConvAI for backward compatibility
+
+  // Fetch selected student data
+  const { data: selectedStudent } = useQuery<{ id: string; name: string; avatarUrl?: string; avatarType?: 'default' | 'preset' | 'upload'; grade?: string }>({
+    queryKey: ['/api/students', selectedStudentId],
+    enabled: !!selectedStudentId,
+  });
+
+  // Map student grade to dropdown level value
+  const mapGradeToLevel = (studentGrade: string): AgentLevel => {
+    if (!studentGrade) return 'college';
+    
+    // Normalize: lowercase, remove punctuation, replace spaces/dashes with single dash
+    const normalized = studentGrade
+      .toLowerCase()
+      .trim()
+      .replace(/[^\w\s-]/g, '') // Remove punctuation except dashes
+      .replace(/\s+/g, '-')     // Replace spaces with dashes
+      .replace(/-+/g, '-')      // Collapse multiple dashes
+      .replace(/^-|-$/g, '');   // Trim leading/trailing dashes
+    
+    // Check for college/adult keywords first (highest priority for explicit matches)
+    if (normalized.includes('college') || normalized.includes('adult') || normalized.includes('university')) {
+      return 'college';
+    }
+    
+    // Check for kindergarten keywords
+    if (normalized.includes('kindergarten') || normalized === 'k' || normalized.startsWith('k-')) {
+      return 'k2';
+    }
+    
+    // Check for grade band patterns: handles "3-5", "grades-3-5", "grade-3-5", "3-to-5"
+    const bandMatch = normalized.match(/(\d+)-(?:to-)?(\d+)/);
+    if (bandMatch) {
+      const lowGrade = parseInt(bandMatch[1]);
+      const highGrade = parseInt(bandMatch[2]);
+      // Map based on the range
+      if (highGrade <= 2) return 'k2';
+      if (lowGrade >= 3 && highGrade <= 5) return 'g3_5';
+      if (lowGrade >= 6 && highGrade <= 8) return 'g6_8';
+      if (lowGrade >= 9 && highGrade <= 12) return 'g9_12';
+    }
+    
+    // Extract any numeric grade (handles '5th', '5', 'grade-5', 'grade5', etc.)
+    const numMatch = normalized.match(/(\d+)/);
+    if (numMatch) {
+      const gradeNum = parseInt(numMatch[1]);
+      if (gradeNum >= 0 && gradeNum <= 2) return 'k2';
+      if (gradeNum >= 3 && gradeNum <= 5) return 'g3_5';
+      if (gradeNum >= 6 && gradeNum <= 8) return 'g6_8';
+      if (gradeNum >= 9 && gradeNum <= 12) return 'g9_12';
+      if (gradeNum > 12) return 'college';
+    }
+    
+    // Default to college/adult
+    return 'college';
+  };
+
+  // State University is college-only — always use college level regardless of student profile
+  useEffect(() => {
+    setLevel('college');
+  }, [selectedStudent?.grade]);
+
+  // Fetch student's pinned documents for RAG context
+  const { data: pinnedDocs } = useQuery<Array<{ pin: any; document: { id: string; title: string } }>>({
+    queryKey: ['/api/students', selectedStudentId, 'pinned-docs'],
+    enabled: !!selectedStudentId,
+  });
+
+  // Fetch total uploaded document count for doc acknowledgment logic
+  const { data: allDocuments } = useQuery<{ documents: Array<{ id: string }> }>({
+    queryKey: ['documents', user?.id],
+    queryFn: async () => {
+      const response = await apiRequest('GET', '/api/documents/list');
+      return response.json();
+    },
+    enabled: !!user?.id,
+  });
+  const uploadedDocCount = allDocuments?.documents?.length ?? 0;
+
+  // Fetch active lesson details for structured tutoring
+  const { data: activeLessonData } = useQuery<{
+    lesson: {
+      id: string;
+      grade: string;
+      subject: string;
+      topic: string;
+      lessonTitle: string;
+      learningGoal: string;
+      tutorIntroduction: string;
+      guidedQuestions: string[];
+      practicePrompts: string[];
+      checkUnderstanding: string;
+      encouragementClose: string;
+      estimatedMinutes: number;
+    };
+  }>({
+    queryKey: ['/api/practice-lessons', activeLessonId],
+    enabled: !!activeLessonId,
+  });
+
+  const activeLesson = activeLessonData?.lesson;
+
+  const contextDocumentIds = pinnedDocs?.map(pd => pd.document.id) || [];
+
+  // Load ConvAI script
+  useEffect(() => {
+    const existing = document.querySelector('script[data-elevenlabs-convai]');
+    if (existing) {
+      setScriptReady(true);
+      return;
+    }
+
+    const s = document.createElement("script");
+    s.src = "https://unpkg.com/@elevenlabs/convai-widget-embed";
+    s.async = true;
+    s.type = "text/javascript";
+    s.setAttribute("data-elevenlabs-convai", "1");
+    
+    s.onload = () => {
+      setScriptReady(true);
+      if (typeof window !== 'undefined' && (window as any).gtag) {
+        (window as any).gtag('event', 'convai_script_loaded', {
+          event_category: 'performance'
+        });
+      }
+    };
+    
+    s.onerror = () => {
+      console.error('Failed to load ElevenLabs ConvAI script');
+      if (typeof window !== 'undefined' && (window as any).gtag) {
+        (window as any).gtag('event', 'convai_script_error', {
+          event_category: 'error',
+          event_label: 'script_load_failed'
+        });
+      }
+    };
+    
+    document.body.appendChild(s);
+  }, []);
+
+  const startTutor = async () => {
+    if (!scriptReady) return;
+    
+    if (sessionState !== 'idle') {
+      console.log(`[VOICE_UI] Start blocked — sessionState=${sessionState}`);
+      if (sessionState === 'ending') {
+        toast({ title: "Please wait", description: "Session is still ending…" });
+      }
+      return;
+    }
+    
+    setSessionState('starting');
+    
+    // Require a student profile to be selected
+    if (!selectedStudentId || !selectedStudent) {
+      toast({
+        title: "Student profile required",
+        description: "Please select or create a student profile before starting a session.",
+        variant: "destructive",
+      });
+      setProfileDrawerOpen(true);
+      setSessionState('idle');
+      return;
+    }
+    
+    // Use the selected student's name
+    const effectiveStudentName = selectedStudent.name || studentName.trim();
+    
+    if (!effectiveStudentName) {
+      toast({
+        title: "Student name required",
+        description: "Please select a student profile with a valid name.",
+        variant: "destructive",
+      });
+      setSessionState('idle');
+      return;
+    }
+    
+    // Update the lastSessionAt timestamp for the selected student
+    try {
+      await apiRequest('POST', `/api/students/${selectedStudentId}/session-started`, {});
+    } catch (error) {
+      console.log('[TutorPage] Could not update session timestamp:', error);
+    }
+
+    // Check session availability
+    try {
+      const response = await apiRequest('POST', '/api/session/check-availability', {});
+      const availabilityData = await response.json();
+
+      if (!availabilityData.allowed) {
+        if (availabilityData.code === 'EMAIL_NOT_VERIFIED') {
+          toast({
+            title: "Email Verification Required",
+            description: availabilityData.message || "Please verify your email address to start tutoring.",
+            variant: "destructive",
+          });
+        } else if (availabilityData.reason === 'no_subscription') {
+          toast({ title: "Subscription Required", description: availabilityData.message, variant: "destructive" });
+          setLocation('/pricing');
+        } else if (availabilityData.reason === 'subscription_expired' || availabilityData.reason === 'subscription_ended') {
+          toast({ title: "Subscription Expired", description: availabilityData.message || "Your subscription has ended. Please reactivate to continue learning.", variant: "destructive" });
+          setLocation('/dashboard?tab=subscription');
+        } else if (availabilityData.reason === 'payment_failed') {
+          toast({ title: "Payment Issue", description: availabilityData.message || "There is an issue with your payment. Please update your payment method.", variant: "destructive" });
+          setLocation('/dashboard?tab=subscription');
+        } else if (availabilityData.reason === 'no_minutes') {
+          toast({ title: "Out of Minutes", description: availabilityData.message, variant: "destructive" });
+        }
+        setSessionState('idle');
+        return;
+      }
+
+      if (availabilityData.warningThreshold && availabilityData.remainingMinutes < 10) {
+        toast({
+          title: "Low Minutes",
+          description: `Only ${availabilityData.remainingMinutes} minutes remaining`,
+          variant: "default",
+        });
+      }
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: "Failed to check session availability. Please try again.",
+        variant: "destructive",
+      });
+      setSessionState('idle');
+      return;
+    }
+    
+    // Save progress
+    const currentProgress = loadProgress();
+    saveProgress({
+      ...currentProgress,
+      lastLevel: level,
+      lastSubject: subject,
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Reset transcript and connection state for fresh session
+    setTranscriptMessages([]);
+    setIsTranscriptConnected(false);
+    
+    // CRITICAL: Pre-unlock audio during this user gesture for iOS/Android
+    // RealtimeVoiceHost will auto-connect on mount, but audio unlock must happen
+    // synchronously during a user gesture (button tap). Creating and resuming
+    // an AudioContext here ensures audio playback works on mobile.
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (ctx.state === 'suspended') ctx.resume();
+      const buf = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch (e) {
+      console.log('[TutorPage] Audio pre-unlock attempt:', e);
+    }
+    
+    setSessionStartTime(new Date());
+    setSessionState('active');
+    setMounted(true);
+    
+    toast({
+      title: "Connected!",
+      description: `Your ${level} ${subject} tutor is ready to help.`,
+    });
+
+    // Analytics
+    if (typeof window !== 'undefined' && (window as any).gtag) {
+      (window as any).gtag('event', 'tutor_session_start', {
+        event_category: 'tutoring',
+        custom_parameter_1: level,
+        custom_parameter_2: subject,
+        custom_parameter_3: studentName || selectedStudent?.name || 'anonymous'
+      });
+    }
+  };
+
+  const switchAgent = async () => {
+    // Properly end the current session first
+    console.log('[TutorPage] 🔄 Switching tutor - ending current session...');
+    
+    // End the session (this disconnects WebSocket and logs usage)
+    await stop();
+    
+    // Wait a bit longer to ensure cleanup is complete
+    await new Promise(resolve => setTimeout(resolve, 300));
+    
+    // Reset transcript for new agent
+    setTranscriptMessages([]);
+    setIsTranscriptConnected(false);
+    
+    // Start new session with updated agent
+    console.log('[TutorPage] ✅ Starting new tutor session...');
+    await startTutor();
+  };
+
+  const stop = async () => {
+    if (sessionState === 'ending') {
+      console.log('[VOICE_UI] stop() called but already ending — skip');
+      return;
+    }
+    console.log('[VOICE_UI] state=ending awaiting_endSession=true');
+    setSessionState('ending');
+    
+    if (voiceHostRef.current) {
+      try {
+        console.log('[VOICE_UI] calling voiceHostRef.endSession()');
+        await voiceHostRef.current.endSession();
+        console.log('[VOICE_UI] endSession resolved — WS closed');
+      } catch (error) {
+        console.error('[VOICE_UI] endSession error:', error);
+      }
+    } else {
+      console.warn('[VOICE_UI] voiceHostRef.current is NULL — cannot call endSession');
+    }
+    
+    // Log usage if session was active
+    if (sessionStartTime) {
+      const endTime = new Date();
+      const durationMs = endTime.getTime() - sessionStartTime.getTime();
+      const minutesUsed = Math.ceil(durationMs / 60000);
+
+      if (minutesUsed > 0) {
+        try {
+          await apiRequest('POST', '/api/usage/log', {
+            minutesUsed,
+            sessionStart: sessionStartTime.toISOString(),
+            sessionEnd: endTime.toISOString(),
+          });
+          
+          queryClient.invalidateQueries({ queryKey: ['/api/session/check-availability'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/voice-balance'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/user/voice-balance'] });
+          queryClient.invalidateQueries({ queryKey: ['/api/user'] });
+          
+          toast({
+            title: "Session Ended",
+            description: `${minutesUsed} minute${minutesUsed === 1 ? '' : 's'} logged`,
+          });
+        } catch (error: any) {
+          console.error('Failed to log usage:', error);
+        }
+      }
+      
+      setSessionStartTime(null);
+    }
+
+    setMounted(false);
+    setShowFeedback(true);
+    setTranscriptMessages([]);
+    setIsTranscriptConnected(false);
+    setSessionState('idle');
+    console.log('[VOICE_UI] state=idle — fully torn down');
+    
+    // Analytics
+    if (typeof window !== 'undefined' && (window as any).gtag) {
+      (window as any).gtag('event', 'tutor_session_end', {
+        event_category: 'tutoring'
+      });
+    }
+  };
+
+  // Use static agent ID based on selected level
+  const agentId = AGENTS[level as keyof typeof AGENTS];
+  
+  const levelGreetings = GREETINGS[level as keyof typeof GREETINGS];
+  const greetingPreview = (levelGreetings as any)?.[subject] || 
+                         (levelGreetings as any)?.["general"] || 
+                         "Hello! I'm your AI tutor, ready to help you learn.";
+
+  const metadata = {
+    ...(studentName && { student_name: studentName }),
+    ...(gradeText && { grade: gradeText }),
+    subject,
+    level
+  };
+
+  const firstUserMessage = lastSummary ? 
+    `Previous session summary: ${lastSummary}. Please continue our learning journey from here.` : 
+    undefined;
+
+  // Save progress when level or subject changes
+  useEffect(() => {
+    if (level && subject) {
+      const currentProgress = loadProgress();
+      saveProgress({
+        ...currentProgress,
+        lastLevel: level,
+        lastSubject: subject,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+  }, [level, subject]);
+
+  const handleOpenProfile = (studentId?: string) => {
+    setEditingStudentId(studentId);
+    setProfileDrawerOpen(true);
+  };
+
+  const handleStudentSwitch = async (newStudentId: string | null) => {
+    const oldStudentId = selectedStudentId;
+    if (oldStudentId === newStudentId) return;
+    
+    console.log(`[PROFILE] switch old=${oldStudentId || 'none'} new=${newStudentId || 'none'} forced_session_restart=${!!sessionStartTime}`);
+    
+    if (sessionStartTime) {
+      console.log('[PROFILE] Active session detected - forcing teardown before profile switch');
+      await stop();
+      setTranscriptMessages([]);
+      setIsTranscriptConnected(false);
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    
+    setSelectedStudentId(newStudentId);
+  };
+
+  // Handle page close/refresh to log minutes
+  useEffect(() => {
+    const handleBeforeUnload = async () => {
+      if (sessionStartTime) {
+        const endTime = new Date();
+        const durationMs = endTime.getTime() - sessionStartTime.getTime();
+        const minutesUsed = Math.ceil(durationMs / 60000);
+
+        if (minutesUsed > 0) {
+          // Use sendBeacon for reliable logging during page unload
+          const data = JSON.stringify({
+            minutesUsed,
+            sessionStart: sessionStartTime.toISOString(),
+            sessionEnd: endTime.toISOString(),
+          });
+          
+          navigator.sendBeacon('/api/usage/log', data);
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [sessionStartTime]);
+
+  return (
+    <NetworkAwareWrapper>
+      <TutorErrorBoundary>
+        {/* Ambient neural network canvas - side margins only */}
+        <AmbientBackground />
+        {/* Global Navigation */}
+        <NavigationHeader />
+        {/* Show verification banner if email not verified */}
+        {user && !user.emailVerified && <VerificationBanner />}
+        <div className="tutor-page max-w-3xl mx-auto p-4 space-y-4" style={{ position: 'relative', zIndex: 1 }}>
+          {/* Student Switcher Row */}
+          <div className="flex items-center justify-end gap-2 mb-2">
+            <StudentSwitcher
+              selectedStudentId={selectedStudentId || undefined}
+              onSelectStudent={handleStudentSwitch}
+              onOpenProfile={handleOpenProfile}
+            />
+          </div>
+
+          {/* Usage Display */}
+          {minutesData && (
+            <Card className="shadow-sm" data-testid="card-usage-display">
+              <CardContent className="pt-6">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Clock className="w-5 h-5 text-primary" />
+                    <h3 className="font-semibold text-foreground">Voice Minutes</h3>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-foreground" data-testid="text-remaining-minutes">
+                      {minutesData.remaining}
+                    </p>
+                    <p className="text-xs text-muted-foreground">of {minutesData.total} remaining</p>
+                  </div>
+                </div>
+
+                <Progress 
+                  value={(minutesData.used / minutesData.total) * 100} 
+                  className="h-2 mb-3"
+                  data-testid="progress-usage"
+                />
+
+                <div className="flex items-center justify-between text-sm">
+                  <p className="text-muted-foreground">
+                    {minutesData.used} used · {minutesData.bonusMinutes > 0 && `${minutesData.bonusMinutes} bonus`}
+                  </p>
+                  
+                  {minutesData.remaining < 10 && (
+                    <button
+                      className="text-primary hover:underline font-medium flex items-center gap-1"
+                      data-testid="button-buy-more-minutes"
+                    >
+                      <AlertCircle className="w-4 h-4" />
+                      Buy More
+                    </button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Hero Banner — rotating campus slideshow with stats strip */}
+          <HeroBanner mounted={mounted} />
+
+          {/* Post-session feedback — appears after session ends */}
+          <SessionFeedback show={showFeedback && !mounted} />
+
+          {/* Getting Started Instructions - Collapsible, Hidden during active session */}
+          {!mounted && (
+          <>
+          <Collapsible>
+          <div className="relative bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md overflow-hidden">
+            <div 
+              className="absolute inset-0 opacity-15 pointer-events-none bg-cover bg-right-bottom"
+              style={{ backgroundImage: `url(${tutorHero})` }}
+            />
+            <CollapsibleTrigger className="w-full">
+              <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-blue-50/50 dark:hover:bg-blue-900/20 transition-colors">
+                <h3 className="font-bold text-blue-900 dark:text-blue-100 flex items-center gap-2">
+                  <BookOpen className="h-5 w-5 text-blue-600" />
+                  How to Use State University AI Tutor
+                </h3>
+                <ChevronDown className="h-5 w-5 text-blue-600 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+              </div>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+            <div className="bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm p-4 pt-0 rounded-lg mx-4 mb-4 border border-blue-100 dark:border-blue-900 shadow-sm">
+              <div className="space-y-3 text-sm text-gray-700 dark:text-gray-300">
+                <div className="flex gap-3 items-start">
+                  <div className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">1</div>
+                  <p><strong>Set up your audio devices</strong> - Go to Settings (menu button) to select and test your microphone and speakers. This is especially important for first-time users to ensure clear voice communication.</p>
+                </div>
+                
+                <div className="flex gap-3 items-start bg-red-50 dark:bg-red-900/30 p-3 rounded-md border-2 border-red-400 dark:border-red-600">
+                  <div className="bg-red-600 text-white rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">2</div>
+                  <p className="text-red-700 dark:text-red-300 font-bold" data-testid="text-profile-required-notice">Please complete your user profile for each student to start the session.</p>
+                </div>
+
+                <div className="flex gap-3 items-start">
+                  <div className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">3</div>
+                  <p><strong>Select your grade level</strong> you want help with (this auto-updates based on your profile).</p>
+                </div>
+
+                <div className="flex gap-3 items-start">
+                  <div className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">4</div>
+                  <p><strong>Upload your materials (optional)</strong> - Share homework, worksheets, or study guides (PDF, DOCX, or images). Select documents to use in this session, or upload new ones.</p>
+                </div>
+
+                <div className="flex gap-3 items-start">
+                  <div className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">5</div>
+                  <p><strong>Wait a few seconds</strong> after uploading for documents to process completely.</p>
+                </div>
+
+                <div className="flex gap-3 items-start">
+                  <div className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">6</div>
+                  <p>Click <strong>"Start Tutor Session"</strong> to begin your voice conversation.</p>
+                </div>
+
+                <div className="flex gap-3 items-start">
+                  <div className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">7</div>
+                  <p><strong>Start speaking</strong> - Ask questions about your homework or discuss any topic. The tutor uses your uploaded documents to give personalized guidance!</p>
+                </div>
+
+                <div className="flex gap-3 items-start">
+                  <div className="bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-full w-5 h-5 flex items-center justify-center shrink-0 mt-0.5 font-bold text-xs">8</div>
+                  <p><strong>View the transcript</strong> below to see your conversation in real-time.</p>
+                </div>
+              </div>
+            </div>
+            </CollapsibleContent>
+          </div>
+          </Collapsible>
+          </>
+          )}
+
+          {/* Voice Tips Section - Collapsible, Hidden during active session */}
+          {!mounted && (
+          <Collapsible>
+          <div className="relative bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-md overflow-hidden">
+            <CollapsibleTrigger className="w-full">
+              <div className="flex items-center justify-between p-4 cursor-pointer hover:bg-blue-50/50 dark:hover:bg-blue-900/20 transition-colors">
+                <h3 className="font-bold text-blue-900 dark:text-blue-100 flex items-center gap-2">
+                  <BookOpen className="h-5 w-5 text-blue-600" />
+                  How to Talk to Your Tutor (Voice Tips)
+                </h3>
+                <ChevronDown className="h-5 w-5 text-blue-600 transition-transform duration-200 group-data-[state=open]:rotate-180" />
+              </div>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+            <div className="px-4 pb-4">
+              <div className="space-y-3 text-sm text-gray-700 dark:text-gray-300">
+                <p className="text-gray-600 dark:text-gray-400">
+                  Speaking naturally works best. You don't need special commands or perfect phrasing—just talk as you would to a real tutor.
+                </p>
+                
+                <p className="font-medium text-gray-700 dark:text-gray-300">Helpful tips for the best experience:</p>
+                
+                <ul className="space-y-2 ml-1">
+                  <li className="flex gap-2 items-start">
+                    <ChevronRight className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                    <span>Speak in complete thoughts, then pause briefly so the tutor knows you're finished</span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <ChevronRight className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                    <span>If you need a moment to think, that's okay—short pauses are normal</span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <ChevronRight className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                    <span>You can interrupt the tutor at any time by speaking</span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <ChevronRight className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                    <span>If you want the tutor to stop or listen again, just start talking</span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <ChevronRight className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                    <span>Reading out loud more slowly is fine—the tutor will wait</span>
+                  </li>
+                  <li className="flex gap-2 items-start">
+                    <ChevronRight className="h-4 w-4 text-blue-500 shrink-0 mt-0.5" />
+                    <span>When you're done, say "Goodbye" or "End session" to finish cleanly</span>
+                  </li>
+                  <li className="flex gap-2 items-start bg-amber-50 dark:bg-amber-900/30 p-2 rounded-md border border-amber-200 dark:border-amber-700 -mx-1">
+                    <ChevronRight className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <span className="text-amber-800 dark:text-amber-200">For best results, try to use your tutor in a quiet space. Background sounds like TVs, radios, or other people talking can interfere with listening.</span>
+                  </li>
+                  <li className="flex gap-2 items-start bg-amber-50 dark:bg-amber-900/30 p-2 rounded-md border border-amber-200 dark:border-amber-700 -mx-1">
+                    <ChevronRight className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <span className="text-amber-800 dark:text-amber-200">If you can't be in a quiet room, switch to <strong>Text Only</strong> mode. This turns off your microphone and lets you continue without interruptions.</span>
+                  </li>
+                </ul>
+                
+                <p className="text-gray-600 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
+                  This tutor is designed to guide you, not rush you. Take your time—learning works best at your pace.
+                </p>
+              </div>
+            </div>
+            </CollapsibleContent>
+          </div>
+          </Collapsible>
+          )}
+
+          {/* Active Lesson Context Card */}
+          {activeLesson && (
+            <Card className="mt-4 border-2 border-primary/30 bg-gradient-to-r from-primary/5 to-primary/10" data-testid="card-active-lesson">
+              <CardContent className="pt-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-2">
+                      <GraduationCap className="h-5 w-5 text-primary" />
+                      <span className="text-xs font-medium text-primary uppercase tracking-wide">
+                        Practice Lesson
+                      </span>
+                    </div>
+                    <h3 className="font-semibold text-lg mb-1">{activeLesson.lessonTitle}</h3>
+                    <p className="text-sm text-muted-foreground mb-3">{activeLesson.learningGoal}</p>
+                    
+                    <div className="flex flex-wrap gap-2 mb-3">
+                      <span className="text-xs bg-primary/20 text-primary px-2 py-1 rounded-full">
+                        {activeLesson.subject}
+                      </span>
+                      <span className="text-xs bg-muted text-muted-foreground px-2 py-1 rounded-full">
+                        {activeLesson.topic}
+                      </span>
+                      <span className="text-xs bg-muted text-muted-foreground px-2 py-1 rounded-full flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {activeLesson.estimatedMinutes} min
+                      </span>
+                    </div>
+
+                    <div className="bg-background/50 p-3 rounded-lg border">
+                      <p className="text-sm italic text-muted-foreground">
+                        "{activeLesson.tutorIntroduction}"
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setActiveLessonId(null);
+                      window.history.replaceState({}, '', '/tutor');
+                    }}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Document Upload & Session Controls Section */}
+          {user && (
+            <Card className="mt-4" data-testid="card-document-upload">
+              <CardContent className="pt-4">
+                {!mounted && (
+                  <>
+                    <h3 className="text-sm font-semibold flex items-center gap-2 mb-3">
+                      <Paperclip className="w-4 h-4" />
+                      Study Materials
+                    </h3>
+                    <p className="text-xs text-muted-foreground mb-3">
+                      Select documents before starting your session. You can also upload files during the session using the chat input.
+                    </p>
+                    <AssignmentsPanel 
+                      userId={user.id}
+                      selectedDocumentIds={selectedDocumentIds}
+                      onDocumentSelectionChange={setSelectedDocumentIds}
+                    />
+                  </>
+                )}
+
+                <div className={`flex flex-col sm:flex-row gap-3 items-stretch sm:items-center ${!mounted ? 'mt-5 pt-5 border-t border-border' : ''}`}>
+                  <select 
+                    id="age-range" 
+                    value={level} 
+                    onChange={e => setLevel(e.target.value as AgentLevel)}
+                    className="px-3 py-2 border border-input bg-background text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    data-testid="select-level"
+                    disabled={sessionState !== 'idle'}
+                  >
+                    <option value="college">College/Adult</option>
+                  </select>
+
+                  <select 
+                    id="language" 
+                    value={selectedLanguage} 
+                    onChange={e => setSelectedLanguage(e.target.value)}
+                    className="px-3 py-2 border border-input bg-background text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+                    data-testid="select-language"
+                    disabled={sessionState !== 'idle'}
+                  >
+                    {SUPPORTED_LANGUAGES.map(lang => (
+                      <option key={lang.code} value={lang.code}>
+                        {lang.name}
+                      </option>
+                    ))}
+                  </select>
+
+                </div>
+
+                {/* Pre-session mode selector — own row, aligned under dropdowns */}
+                {sessionState === 'idle' && (
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mt-4">
+                    <div>
+                      <p className="text-xs text-muted-foreground mb-1.5">Session Mode</p>
+                      <div className="flex items-center gap-1 border border-border rounded-lg p-1 bg-muted/30">
+                        {([
+                          { key: 'voice' as const, label: 'Voice', Icon: Mic, tip: 'Speak & hear your tutor' },
+                          { key: 'hybrid' as const, label: 'Listen Only', Icon: Headphones, tip: 'Type to tutor, hear responses' },
+                          { key: 'text' as const, label: 'Text Only', Icon: Type, tip: 'Type & read (silent)' },
+                        ]).map(({ key, label, Icon, tip }) => (
+                          <button
+                            key={key}
+                            onClick={() => { setSessionMode(key); localStorage.setItem('preferred-communication-mode', key); }}
+                            className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                              sessionMode === key
+                                ? 'bg-background text-foreground shadow-sm border border-border'
+                                : 'text-muted-foreground hover:text-foreground hover:bg-background/50'
+                            }`}
+                            title={tip}
+                          >
+                            <Icon className="h-4 w-4" />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button 
+                      id="start-btn" 
+                      onClick={startTutor} 
+                      disabled={!scriptReady || !selectedStudentId || sessionState !== 'idle'}
+                      className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-primary font-semibold text-base"
+                      data-testid="button-start-tutor"
+                      title={!selectedStudentId ? "Please select a student profile to connect" : ""}
+                    >
+                      Start Tutor Session
+                    </button>
+                  </div>
+                )}
+
+                {/* Start button when session is starting */}
+                {sessionState !== 'idle' && sessionState !== 'active' && (
+                  <div className="mt-4">
+                    <button 
+                      disabled
+                      className="px-6 py-2.5 bg-primary text-primary-foreground rounded-md opacity-50 cursor-not-allowed font-semibold text-base"
+                    >
+                      Starting...
+                    </button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Voice System Widget */}
+          {mounted && (
+            <div className="mt-6 space-y-4">
+              {useConvai ? (
+                <>
+                  {/* ElevenLabs ConvAI System */}
+                  <ConvaiHost
+                    agentId={agentId}
+                    onMessage={(message) => {
+                      setTranscriptMessages(prev => [...prev, message]);
+                    }}
+                    onConnectionStatus={(connected) => {
+                      setIsTranscriptConnected(connected);
+                    }}
+                  />
+                  
+                  <ConvaiTranscript 
+                    messages={transcriptMessages}
+                    isConnected={isTranscriptConnected}
+                  />
+                </>
+              ) : (
+                <>
+                  {/* Custom Voice System (Deepgram + Claude + ElevenLabs) */}
+                  <RealtimeVoiceHost
+                    ref={voiceHostRef}
+                    studentId={selectedStudentId || undefined}
+                    studentName={selectedStudent?.name || studentName}
+                    subject={activeLesson?.subject || subject}
+                    language={selectedLanguage}
+                    ageGroup={level === 'k2' ? 'K-2' : level === 'g3_5' ? '3-5' : level === 'g6_8' ? '6-8' : level === 'g9_12' ? '9-12' : 'College/Adult'}
+                    contextDocumentIds={selectedDocumentIds}
+                    uploadedDocCount={uploadedDocCount}
+                    activeLesson={activeLesson}
+                    autoConnect={true}
+                    initialMode={sessionMode}
+                    onSessionStart={() => setSessionStartTime(new Date())}
+                    onSessionEnd={() => setSessionStartTime(null)}
+                    onDisconnected={() => {
+                      if (sessionState !== 'ending') {
+                        setMounted(false);
+                        setShowFeedback(true);
+                      }
+                    }}
+                    onRequestEnd={stop}
+                    isEnding={sessionState === 'ending'}
+                  />
+                </>
+              )}
+            </div>
+          )}
+          {/* Feedback Widget — bottom of page, visible when session is not active */}
+          {user && !mounted && <FeedbackWidget />}
+        </div>
+
+        {/* Student Profile Panel */}
+        <StudentProfilePanel
+          open={profileDrawerOpen}
+          onOpenChange={setProfileDrawerOpen}
+          studentId={editingStudentId}
+          onStudentSaved={(studentId) => {
+            setSelectedStudentId(studentId);
+            setProfileDrawerOpen(false);
+          }}
+          onStudentDeleted={(deletedId) => {
+            if (selectedStudentId === deletedId) {
+              setSelectedStudentId(null);
+            }
+          }}
+          signupDefaults={user ? {
+            studentName: user.studentName || undefined,
+            studentAge: user.studentAge || undefined,
+            gradeLevel: user.gradeLevel || undefined,
+          } : undefined}
+        />
+
+        {/* Minute Top-Up Modal */}
+
+      </TutorErrorBoundary>
+    </NetworkAwareWrapper>
+  );
+}
