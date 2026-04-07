@@ -67,15 +67,15 @@ const app = express();
 app.set('trust proxy', 1);
 
 // Production: Canonical hostname redirect (apex → www) for session cookie consistency
-// Ensures all users are on www.jiemastery.ai so host-only cookies work correctly
+// Ensures all users are on www.stateuniversity-tutor.ai so host-only cookies work correctly
 // Railway domain is NOT redirected - it must continue to work for health checks
 if (process.env.NODE_ENV === 'production') {
   app.use((req, res, next) => {
     const host = (req.headers.host || '').toLowerCase().split(':')[0]; // Normalize and remove port
     // Only redirect apex to www, don't touch Railway domain
-    if (host === 'jiemastery.ai') {
-      const redirectUrl = `https://www.jiemastery.ai${req.originalUrl}`;
-      console.log(`[Redirect] Canonical redirect: ${host} → www.jiemastery.ai${req.originalUrl}`);
+    if (host === 'stateuniversity-tutor.ai') {
+      const redirectUrl = `https://www.stateuniversity-tutor.ai${req.originalUrl}`;
+      console.log(`[Redirect] Canonical redirect: ${host} → www.stateuniversity-tutor.ai${req.originalUrl}`);
       return res.redirect(301, redirectUrl);
     }
     next();
@@ -230,6 +230,12 @@ app.use((req, res, next) => {
     const { setupCustomVoiceWebSocket } = await import('./routes/custom-voice-ws');
     setupCustomVoiceWebSocket(server);
     console.log('✓ Custom Voice WebSocket ready at /api/custom-voice-ws');
+
+    // Setup Test STT WebSocket for provider comparison
+    console.log('Setting up Test STT WebSocket...');
+    const { setupTestSTTWebSocket } = await import('./routes/test-stt-ws');
+    setupTestSTTWebSocket(server);
+    console.log('✓ Test STT WebSocket ready at /api/test-stt-ws');
 
     // Start embedding worker ONLY in development (requires vector DB configuration)
     // In production (Railway), disable to prevent startup failures

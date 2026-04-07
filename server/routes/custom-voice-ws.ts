@@ -496,6 +496,127 @@ async function getAssemblyAIStreamingToken(): Promise<string> {
   return data.token;
 }
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// STT ARCHITECTURE FIX: Ring buffer, epoch fencing, ForceEndpoint, replay
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const PCM_RING_CAPACITY_FRAMES = 47; // ~3s at ~64ms/frame (2048-byte PCM16 @ 16kHz mono)
+const STT_REPLAY_FRAME_INTERVAL_MS = 20;
+const STT_REPLAY_FRAME_COUNT = 16; // ~1s replay window (was 12/~800ms)
+// Speech watchdog removed — fresh STT per listening window eliminates stale connections.
+// Only the 30s fallback deadman remains as a safety net.
+const STT_FALLBACK_DEADMAN_MS = 30000;
+
+class PcmRingBuffer {
+  private readonly frames: Buffer[] = [];
+  private readonly capacityFrames: number;
+
+  constructor(capacityFrames: number = PCM_RING_CAPACITY_FRAMES) {
+    this.capacityFrames = capacityFrames;
+  }
+
+  push(frame: Buffer): void {
+    this.frames.push(Buffer.from(frame));
+    if (this.frames.length > this.capacityFrames) {
+      this.frames.splice(0, this.frames.length - this.capacityFrames);
+    }
+  }
+
+  tail(frameCount: number): Buffer[] {
+    if (frameCount <= 0) return [];
+    return this.frames.slice(-frameCount).map((f) => Buffer.from(f));
+  }
+
+  clear(): void {
+    this.frames.length = 0;
+  }
+
+  get size(): number {
+    return this.frames.length;
+  }
+}
+
+function sttSleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function sendAssemblyAIControl(
+  sessionState: SessionState,
+  controlType: 'ForceEndpoint' | 'Terminate',
+  expectedEpoch: number = sessionState.sttEpoch,
+): boolean {
+  if (expectedEpoch !== sessionState.sttEpoch) return false;
+  const ws = sessionState.assemblyAIWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  try {
+    ws.send(JSON.stringify({ type: controlType }));
+    console.log(`[AssemblyAI] Sent ${controlType} session=${sessionState.sessionId?.substring(0, 8)} epoch=${expectedEpoch}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sendAssemblyAIForceEndpoint(sessionState: SessionState, expectedEpoch?: number): boolean {
+  return sendAssemblyAIControl(sessionState, 'ForceEndpoint', expectedEpoch);
+}
+
+function sendAssemblyAITerminate(sessionState: SessionState, expectedEpoch?: number): boolean {
+  return sendAssemblyAIControl(sessionState, 'Terminate', expectedEpoch);
+}
+
+/**
+ * Cleanly close the current STT connection when entering TUTOR_SPEAKING.
+ * The connection will be re-opened fresh when entering LISTENING.
+ * This eliminates the stale-connection problem entirely.
+ */
+function teardownSttConnection(sessionState: SessionState, reason: string): void {
+  const epoch = sessionState.sttEpoch;
+  console.log(`[STT] teardown reason=${reason} epoch=${epoch} session=${sessionState.sessionId?.substring(0, 8)}`);
+
+  // Flush and terminate gracefully
+  sendAssemblyAIForceEndpoint(sessionState, epoch);
+  sendAssemblyAITerminate(sessionState, epoch);
+
+  // Close the WebSocket
+  const ws = sessionState.assemblyAIWs;
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    try { ws.close(4001, `teardown:${reason}`); } catch {}
+  }
+
+  // Clear state — connection will be re-created on LISTENING entry
+  sessionState.assemblyAIWs = null;
+  sessionState.sttConnected = false;
+  sessionState.sttBeginReceived = false;
+  sessionState.reconnectInFlight = false;
+  sessionState.sttLastUserSpeechSentAtMs = 0;
+}
+
+async function replayRecentAudioAfterBegin(
+  sessionState: SessionState,
+  expectedEpoch: number,
+): Promise<void> {
+  if (expectedEpoch !== sessionState.sttEpoch) return;
+  if (!sessionState.sttBeginReceived) return;
+  const ws = sessionState.assemblyAIWs;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  const replayFrames = sessionState.sttAudioRingBuffer.tail(STT_REPLAY_FRAME_COUNT);
+  if (replayFrames.length === 0) return;
+
+  console.log(`[STT] replaying ${replayFrames.length} frames after Begin epoch=${expectedEpoch}`);
+  for (const frame of replayFrames) {
+    if (expectedEpoch !== sessionState.sttEpoch) return;
+    const currentWs = sessionState.assemblyAIWs;
+    if (!currentWs || currentWs.readyState !== WebSocket.OPEN) return;
+    try {
+      currentWs.send(frame);
+      await sttSleep(STT_REPLAY_FRAME_INTERVAL_MS);
+    } catch {
+      return;
+    }
+  }
+}
+
 function createAssemblyAIConnection(
   language: string,
   onTranscript: (text: string, endOfTurn: boolean, confidence: number) => void,
@@ -577,10 +698,9 @@ function createAssemblyAIConnection(
   const isNonEnglish = language && NON_ENGLISH_LANGUAGES.some(
     lang => language.toLowerCase().startsWith(lang) || language.toLowerCase() === lang
   );
-  const speechModel = isNonEnglish
-    ? 'universal-streaming-multilingual'
-    : 'universal-streaming-english';
-  console.log(`[AssemblyAI v3] 🌍 Language detection: input="${language}" isNonEnglish=${isNonEnglish} model=${speechModel}`);
+  // speech_model omitted — let AssemblyAI use default streaming model.
+  // u3-rt-pro stalled mid-turn, 'universal' returned 1011.
+  console.log(`[AssemblyAI v3] 🌍 Language detection: input="${language}" isNonEnglish=${isNonEnglish} model=default (no override)`);
   
   // Get token and connect asynchronously
   // A) Use routed base URL for lowest latency
@@ -628,7 +748,6 @@ function createAssemblyAIConnection(
     const urlParams = new URLSearchParams({
       sample_rate: '16000',
       encoding: 'pcm_s16le',
-      speech_model: speechModel,
       format_turns: 'true',
       ...endpointingParams,
     });
@@ -650,7 +769,7 @@ function createAssemblyAIConnection(
     // A) Use routed base URL
     const wsUrl = `${baseUrl}/v3/ws?${urlParams.toString()}`;
     console.log('[AssemblyAI v3] 🌐 Connecting to:', wsUrl);
-    console.log('[AssemblyAI v3] Speech model:', speechModel);
+    console.log('[AssemblyAI v3] Speech model: default (no override)');
     console.log('[AssemblyAI v3] Turn commit mode:', ASSEMBLYAI_TURN_COMMIT_MODE);
     console.log('[AssemblyAI CONNECT URL]', wsUrl);
     
@@ -843,7 +962,12 @@ function createAssemblyAIConnection(
                 const deferredWordCount = latestTranscript.split(/\s+/).filter(w => w.length > 0).length;
                 const NON_LEXICAL_PATTERN = /^(um+|uh+|hmm+|hm+|er+|erm+|mhm+)$/i;
                 const isNonLexical = NON_LEXICAL_PATTERN.test(latestTranscript.trim().toLowerCase());
-                const meetsConfidenceFloor = latestConf >= 0.40 || deferredWordCount >= 5 || (deferredWordCount <= 2 && latestConf >= 0.15 && !isNonLexical);
+                // CONFIDENCE FLOOR: Always accept real words. The 900ms deferral already
+                // filters noise — if a coherent word survives 900ms with end_of_turn:true,
+                // it's real speech. Only reject pure filler (um/uh/hmm).
+                // Previous versions dropped "Beetlejuice" (1 word, 0.23 conf), "I said beetlejuice"
+                // (3 words, 0.23 conf), "jupiter" (1 word, 0.37 conf) — all legitimate answers.
+                const meetsConfidenceFloor = !isNonLexical;
                 if (latestTranscript && !state.currentTurnCommitted && meetsConfidenceFloor) {
                   console.log(`[AssemblyAI v3] ✅ Deferred EOT firing now with: "${latestTranscript.substring(0, 60)}" (conf=${latestConf.toFixed(2)} words=${deferredWordCount})`);
                   if (turnOrder !== undefined) {
@@ -1050,21 +1174,27 @@ const STT_SEND_FAILURE_WATCHDOG_THRESHOLD = 50;
 const STT_SEND_FAILURE_LOG_RATE_LIMIT_MS = 1000;
 const STT_SEND_FAILURE_LOG_MAX_PER_FRAME = 10;
 
-function sendAudioToAssemblyAI(ws: WebSocket | null, audioBuffer: Buffer, state?: AssemblyAIState, sessionState?: SessionState): boolean {
+function sendAudioToAssemblyAI(ws: WebSocket | null, audioBuffer: Buffer, state?: AssemblyAIState, sessionState?: SessionState, isSpeechFrame: boolean = false): boolean {
+  // Always keep the ring buffer warm (PcmRingBuffer handles overflow internally).
+  // During tutor playback, only retain frames classified as speech for barge-in replay.
   if (sessionState) {
-    sessionState.sttLastAudioForwardAtMs = Date.now();
-    markProgress(sessionState);
-  }
-  
-  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
-    if (sessionState) {
+    if (sessionState.phase !== 'TUTOR_SPEAKING' || isSpeechFrame) {
       sessionState.sttAudioRingBuffer.push(audioBuffer);
-      if (sessionState.sttAudioRingBuffer.length > 16) {
-        sessionState.sttAudioRingBuffer.shift();
-      }
-      // P0.4: Track send failures
-      trackSendFailure(sessionState);
     }
+  }
+
+  // Phase 1 guard: do NOT forward audio during tutor playback
+  if (sessionState && (sessionState.phase === 'TUTOR_SPEAKING' || sessionState.tutorAudioPlaying)) {
+    return false;
+  }
+
+  // Epoch + connection readiness checks
+  if (sessionState && (!sessionState.sttBeginReceived || sessionState.reconnectInFlight)) {
+    return false;
+  }
+
+  if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+    if (sessionState) trackSendFailure(sessionState);
     return false;
   }
   
@@ -1080,13 +1210,7 @@ function sendAudioToAssemblyAI(ws: WebSocket | null, audioBuffer: Buffer, state?
   }
   
   if (ws.readyState !== WebSocket.OPEN) {
-    if (sessionState) {
-      sessionState.sttAudioRingBuffer.push(audioBuffer);
-      if (sessionState.sttAudioRingBuffer.length > 16) {
-        sessionState.sttAudioRingBuffer.shift();
-      }
-      trackSendFailure(sessionState);
-    }
+    if (sessionState) trackSendFailure(sessionState);
     return false;
   }
   
@@ -1101,6 +1225,16 @@ function sendAudioToAssemblyAI(ws: WebSocket | null, audioBuffer: Buffer, state?
     sessionState.sttSendFailureStartedAt = 0;
   }
   
+  // Update liveness timestamp only on actual successful send (after readyState=OPEN confirmed)
+  if (sessionState) {
+    const now = Date.now();
+    sessionState.sttLastAudioForwardAtMs = now;
+    markProgress(sessionState);
+    if (isSpeechFrame) {
+      sessionState.sttLastUserSpeechSentAtMs = now;
+    }
+  }
+
   if (!didLogFirstAssemblyAIAudio) {
     console.log('[AssemblyAI] 🎵 First audio chunk bytes:', audioBuffer.length);
     didLogFirstAssemblyAIAudio = true;
@@ -1422,7 +1556,7 @@ interface SessionState {
   sttReconnectTimerId: NodeJS.Timeout | null;
   sttDeadmanTimerId: NodeJS.Timeout | null;
   sttConnectionId: number;
-  sttAudioRingBuffer: Buffer[];
+  sttAudioRingBuffer: PcmRingBuffer;
   sttDisconnectedSinceMs: number | null;
   // P0.3: Session-sticky keyterms disable after 3005 config error
   sttKeytermsDisabledForSession: boolean;
@@ -1432,12 +1566,23 @@ interface SessionState {
   sttSendFailureLoggedAt: number;
   sttSendFailureTotalDropped: number;
   sttSendFailureStartedAt: number;
+  // STT AUDIO GATING: Prevent forwarding echo/noise during tutor playback
+  sttBeginReceived: boolean;
+  sttLastUserSpeechSentAtMs: number;
+  // STT EPOCH FENCING: Prevent stale callback race conditions
+  sttEpoch: number;
+  reconnectInFlight: boolean;
+  // SPEECH WATCHDOG: Detect VAD speech with no STT transcripts
+  speechWatchdogTimerId: NodeJS.Timeout | null;
+  speechWatchdogSegments: number; // VAD speech segments since last transcript
   // NO-PROGRESS WATCHDOG: Detect stalled sessions and auto-recover
   lastProgressAt: number;
   watchdogTimerId: NodeJS.Timeout | null;
   watchdogRecoveries: number;
   lastWatchdogRecoveryAt: number;
   watchdogDisabled: boolean;
+  // STT LIFECYCLE: Reconnect function stored on state for cross-scope access
+  sttReconnectFn: (() => void) | null;
   // TRIAL MINUTE ENFORCEMENT: Periodic check to end session when trial minutes exhausted
   trialMinuteCheckTimerId: NodeJS.Timeout | null;
   trialMinuteWarned: boolean; // Whether 2-minute warning has been sent
@@ -1647,6 +1792,10 @@ function hardInterruptTutor(
   state.lastBargeInAt = now;
   state.wasInterrupted = true;
   state.lastInterruptionTime = now;
+  // Reset STT deadman baseline so it gets a full window from barge-in
+  state.sttLastMessageAtMs = now;
+  // Flush any in-flight partial from AssemblyAI before switching to LISTENING
+  sendAssemblyAIForceEndpoint(state);
   setPhase(state, 'LISTENING', `barge_in_${reason}`, ws);
 
   let llmAborted = false;
@@ -1701,6 +1850,10 @@ function hardInterruptTutor(
     client_side_stop: !llmAborted && !ttsAborted,
     timestamp: now,
   }));
+
+  // NOTE: proactive STT reconnect after barge-in REMOVED — it was destroying the connection
+  // faster than reconnect could rebuild, causing permanent "Cannot forward audio" failures.
+  // The original stale-STT issue was caused by u3-rt-pro model, which has been removed.
 
   return true;
 }
@@ -1976,6 +2129,10 @@ async function finalizeSession(
   if (state.sttReconnectTimerId) {
     clearTimeout(state.sttReconnectTimerId);
     state.sttReconnectTimerId = null;
+  }
+  if (state.speechWatchdogTimerId) {
+    clearTimeout(state.speechWatchdogTimerId);
+    state.speechWatchdogTimerId = null;
   }
   // TRIAL MINUTE ENFORCEMENT: Clear trial minute check timer
   if (state.trialMinuteCheckTimerId) {
@@ -2352,8 +2509,7 @@ export function setupCustomVoiceWebSocket(server: Server) {
     // Only handle /api/custom-voice-ws path (allow query strings)
     const url = request.url || '';
     if (!url.startsWith('/api/custom-voice-ws')) {
-      // Not our path - destroy socket to prevent leaks
-      socket.destroy();
+      // Not our path - let other upgrade handlers process it
       return;
     }
 
@@ -2604,7 +2760,7 @@ export function setupCustomVoiceWebSocket(server: Server) {
       sttReconnectTimerId: null,
       sttDeadmanTimerId: null,
       sttConnectionId: 0,
-      sttAudioRingBuffer: [],
+      sttAudioRingBuffer: new PcmRingBuffer(),
       sttDisconnectedSinceMs: null,
       sttKeytermsDisabledForSession: false,
       sttKeytermsJson: null,
@@ -2612,11 +2768,18 @@ export function setupCustomVoiceWebSocket(server: Server) {
       sttSendFailureLoggedAt: 0,
       sttSendFailureTotalDropped: 0,
       sttSendFailureStartedAt: 0,
+      speechWatchdogTimerId: null,
+      sttBeginReceived: false,
+      sttLastUserSpeechSentAtMs: 0,
+      sttEpoch: 0,
+      reconnectInFlight: false,
+      speechWatchdogSegments: 0,
       lastProgressAt: Date.now(),
       watchdogTimerId: null,
       watchdogRecoveries: 0,
       lastWatchdogRecoveryAt: 0,
       watchdogDisabled: false,
+      sttReconnectFn: null,
       trialMinuteCheckTimerId: null,
       trialMinuteWarned: false,
       droppedTurnTimestamps: [],
@@ -3102,6 +3265,12 @@ export function setupCustomVoiceWebSocket(server: Server) {
       }
 
       setPhase(state, 'TURN_COMMITTED', `commit_${source}`, ws);
+      // SPEECH WATCHDOG: Turn committed — cancel watchdog, speech was successfully transcribed
+      if (state.speechWatchdogTimerId) {
+        clearTimeout(state.speechWatchdogTimerId);
+        state.speechWatchdogTimerId = null;
+      }
+      state.speechWatchdogSegments = 0;
 
       if (state.isProcessing) {
         // QUEUE COALESCING: Merge with last queued item if processing
@@ -3328,7 +3497,11 @@ export function setupCustomVoiceWebSocket(server: Server) {
         // Feature flag: COHERENCE_GATE_ENABLED (default: false)
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         const coherenceConfig = getCoherenceGateConfig();
-        if (coherenceConfig.enabled) {
+        const completedStudentTurns = state.conversationHistory.filter(m => m.role === "user").length;
+        if (coherenceConfig.enabled && completedStudentTurns < 3) {
+          console.log(`[CoherenceGate] ⏭️ Skipped — insufficient conversation context (turn ${completedStudentTurns} < 3)`);
+        }
+        if (coherenceConfig.enabled && completedStudentTurns >= 3) {
           const conversationContext = extractConversationContext(
             state.conversationHistory,
             state.subject,
@@ -3917,6 +4090,10 @@ export function setupCustomVoiceWebSocket(server: Server) {
                 state.isTutorThinking = false;
                 state.llmInFlight = false;
                 setPhase(state, 'TUTOR_SPEAKING', 'first_sentence', ws);
+                state.sttLastUserSpeechSentAtMs = 0;
+                // FRESH STT PER LISTENING WINDOW: Close STT during tutor speech.
+                // Eliminates stale connection problem — no need to keep pipe warm.
+                teardownSttConnection(state, 'tutor_speaking_start');
                 console.log(`[LLM] first_token_ms=${firstSentenceMs} session=${state.sessionId || 'unknown'}`);
                 
                 // TURN FALLBACK: Cancel fallback timer since we're producing a response
@@ -3960,9 +4137,9 @@ export function setupCustomVoiceWebSocket(server: Server) {
                   const ttsMs = Date.now() - ttsStart;
                   totalTtsMs += ttsMs;
                   totalAudioBytes += audioBuffer.length;
-                  
+
                   console.log(`[Custom Voice] 🔊 Sentence ${sentenceCount} TTS: ${ttsMs}ms, ${audioBuffer.length} bytes`);
-                  
+
                   if (state.ttsAbortController?.signal.aborted) {
                     console.log(JSON.stringify({ event: 'audio_dropped_stale_gen', session_id: state.sessionId, sentence: sentenceCount }));
                     return;
@@ -4125,7 +4302,16 @@ export function setupCustomVoiceWebSocket(server: Server) {
           state.tutorAudioPlaying = false;
           if (state.phase !== 'FINALIZING') {
             setPhase(state, 'LISTENING', 'audio_playback_complete', ws);
+            // FRESH STT PER LISTENING WINDOW: Open new connection for the next student turn.
+            if (USE_ASSEMBLYAI && !state.reconnectInFlight && state.sttReconnectFn) {
+              state.sttReconnectAttempts = 0;
+              state.sttReconnectFn();
+            }
           }
+          // Reset STT deadman baseline — during tutor speech no transcripts arrive,
+          // so sttLastMessageAtMs gets stale (20+ seconds). Without this reset the
+          // deadman fires instantly when the tutor stops speaking.
+          state.sttLastMessageAtMs = Date.now();
           
           // ECHO GUARD: Mark playback end and start echo tail guard
           markPlaybackEnd(state.echoGuardState, echoConfig);
@@ -5121,18 +5307,18 @@ HONESTY INSTRUCTIONS:
               console.log(`[Custom Voice] No documents uploaded - using standard prompt`);
             }
             
-            // Append academic calendar context if available
-            if (state.userId) {
-              try {
-                const { getAcademicContextForVoice } = await import('./academic');
-                const academicCtx = await getAcademicContextForVoice(state.userId);
-                if (academicCtx) {
-                  state.systemInstruction += academicCtx;
-                  console.log(`[Custom Voice] 📅 Academic context appended for user ${state.userId}`);
+            // Family Academic Context injection (non-blocking)
+            try {
+              if (state.userId && state.studentId) {
+                const { getFamilyAcademicContextForVoice } = await import('./family-academic');
+                const familyContext = await getFamilyAcademicContextForVoice(state.userId, state.studentId);
+                if (familyContext) {
+                  state.systemInstruction += familyContext;
+                  console.log(`[Family Academic] Injected voice context for child ${state.studentId} (${familyContext.length} chars)`);
                 }
-              } catch (e) {
-                console.warn(`[Custom Voice] Could not load academic context:`, e);
               }
+            } catch (familyErr) {
+              console.warn('[Family Academic] Voice context injection failed (non-blocking):', familyErr);
             }
 
             // Generate enhanced personalized greeting with LANGUAGE SUPPORT
@@ -5168,42 +5354,62 @@ HONESTY INSTRUCTIONS:
             // CONTINUITY GREETING: Check for prior sessions
             // ============================================
             // Helper: Pick safe topic from summary (NEVER uses summary_text)
-            const pickContinuationTopic = (summary: { subject?: string | null; topicsCovered?: string[] | null }): { topic: string; reason: 'subject' | 'topic' | 'fallback' } => {
+            const pickContinuationTopic = (summary: { subject?: string | null; topicsCovered?: string[] | null }): { topic: string; lastTopic: string; multiTopic: boolean; reason: 'subject' | 'topic' | 'fallback' } => {
               const FALLBACK = 'what we worked on last time';
-              
-              // Try subject first
-              if (summary.subject && summary.subject.length > 0 && summary.subject !== 'general' && summary.subject !== 'unknown') {
-                let topic = summary.subject
-                  .replace(/[\n\r"'`]/g, '') // Strip newlines, quotes, backticks
-                  .replace(/\[[^\]]*\]/g, '') // Strip bracketed content like [email@example.com]
-                  .replace(/\b(name|email|phone|address|password|ssn|credit|card)\b/gi, '') // Remove PII keywords
-                  .trim()
-                  .substring(0, 60);
-                if (topic.length >= 3) {
-                  return { topic, reason: 'subject' };
+              const sanitize = (raw: string) => raw
+                .replace(/[\n\r"'`]/g, '')
+                .replace(/\[[^\]]*\]/g, '')
+                .replace(/\b(name|email|phone|address|password|ssn|credit|card)\b/gi, '')
+                .trim()
+                .substring(0, 60);
+
+              // Try topicsCovered FIRST — these are the actual topics from the last session
+              if (summary.topicsCovered && summary.topicsCovered.length > 0) {
+                const validTopics = summary.topicsCovered
+                  .map(t => sanitize(t))
+                  .filter(t => t.length >= 3);
+
+                if (validTopics.length === 1) {
+                  return { topic: validTopics[0], lastTopic: validTopics[0], multiTopic: false, reason: 'topic' };
+                }
+
+                if (validTopics.length >= 2) {
+                  // For 4+ topics, take only the last 3
+                  const useTopics = validTopics.length > 3 ? validTopics.slice(-3) : validTopics;
+                  const prefix = validTopics.length > 3 ? 'among other things, ' : '';
+                  const last = useTopics[useTopics.length - 1];
+
+                  let topicStr: string;
+                  if (useTopics.length === 2) {
+                    topicStr = `${prefix}${useTopics[0]}, and then ${useTopics[1]}`;
+                  } else {
+                    // 3 topics
+                    topicStr = `${prefix}${useTopics[0]}, then ${useTopics[1]}, and ended with ${useTopics[2]}`;
+                  }
+                  return { topic: topicStr, lastTopic: last, multiTopic: true, reason: 'topic' };
                 }
               }
-              
-              // Try first topic from topicsCovered
-              if (summary.topicsCovered && summary.topicsCovered.length > 0 && summary.topicsCovered[0]) {
-                let topic = summary.topicsCovered[0]
-                  .replace(/[\n\r"'`]/g, '')
-                  .replace(/\[[^\]]*\]/g, '')
-                  .replace(/\b(name|email|phone|address|password|ssn|credit|card)\b/gi, '')
-                  .trim()
-                  .substring(0, 60);
-                if (topic.length >= 3) {
-                  return { topic, reason: 'topic' };
+
+              // Fall back to subject only if it's specific (not generic like "General")
+              if (summary.subject && summary.subject.length > 0) {
+                const subjectLower = summary.subject.toLowerCase();
+                if (subjectLower !== 'general' && subjectLower !== 'unknown') {
+                  const topic = sanitize(summary.subject);
+                  if (topic.length >= 3) {
+                    return { topic, lastTopic: topic, multiTopic: false, reason: 'subject' };
+                  }
                 }
               }
-              
-              return { topic: FALLBACK, reason: 'fallback' };
+
+              return { topic: FALLBACK, lastTopic: FALLBACK, multiTopic: false, reason: 'fallback' };
             };
             
             let continuityTopic: string | null = null;
+            let continuityLastTopic: string | null = null;
+            let continuityMultiTopic = false;
             let hasPriorSessions = false;
             let topicReason: 'subject' | 'topic' | 'fallback' | 'none' = 'none';
-            
+
             // FIRST-TURN-ONLY: Skip greeting lookup if already greeted (reconnect protection)
             if (!shouldSkipGreeting) {
               try {
@@ -5213,12 +5419,14 @@ HONESTY INSTRUCTIONS:
                   studentId: state.studentId || null,
                   limit: 1
                 });
-                
+
                 hasPriorSessions = priorSummaries.length > 0;
-                
+
                 if (hasPriorSessions) {
                   const result = pickContinuationTopic(priorSummaries[0]);
                   continuityTopic = result.topic;
+                  continuityLastTopic = result.lastTopic;
+                  continuityMultiTopic = result.multiTopic;
                   topicReason = result.reason;
                 }
                 
@@ -5233,7 +5441,7 @@ HONESTY INSTRUCTIONS:
             }
             
             // LANGUAGE: Generate greetings in the selected language
-            const getLocalizedGreeting = (lang: string, name: string, tutorName: string, ageGroup: string, docTitles: string[], priorExists: boolean, topic: string | null): string => {
+            const getLocalizedGreeting = (lang: string, name: string, tutorName: string, ageGroup: string, docTitles: string[], priorExists: boolean, topic: string | null, lastTopic: string | null = null, multiTopic: boolean = false): string => {
               // Language-specific greeting templates
               const greetings: Record<string, { intro: string; docAck: (count: number, titles: string) => string; closing: Record<string, string> }> = {
                 en: {
@@ -5399,15 +5607,31 @@ HONESTY INSTRUCTIONS:
               
               // (2) CONTINUITY GREETING: If prior sessions exist and no active docs, use welcome back greeting
               if (priorExists && topic) {
+                if (multiTopic && lastTopic) {
+                  // Multi-topic greeting: "Last time we covered X, then Y, and ended with Z. Want to pick up where we left off with Z, or start something new?"
+                  const multiGreetings: Record<string, (n: string, t: string, tp: string, lt: string) => string> = {
+                    en: (n, t, tp, lt) => `Welcome back, ${n}! I'm ${t}, your tutor. Last time we covered ${tp}. Want to pick up where we left off with ${lt}, or start something new?`,
+                    es: (n, t, tp, lt) => `¡Bienvenido de nuevo, ${n}! Soy ${t}, tu tutor. La última vez cubrimos ${tp}. ¿Quieres continuar con ${lt} o empezar algo nuevo?`,
+                    fr: (n, t, tp, lt) => `Content de te revoir, ${n}! Je suis ${t}, ton tuteur. La dernière fois, on a couvert ${tp}. Tu veux reprendre avec ${lt} ou commencer quelque chose de nouveau?`,
+                    de: (n, t, tp, lt) => `Willkommen zurück, ${n}! Ich bin ${t}, dein Tutor. Letztes Mal haben wir ${tp} behandelt. Möchtest du mit ${lt} weitermachen oder etwas Neues anfangen?`,
+                    pt: (n, t, tp, lt) => `Bem-vindo de volta, ${n}! Sou ${t}, seu tutor. Da última vez cobrimos ${tp}. Quer continuar com ${lt} ou começar algo novo?`,
+                    zh: (n, t, tp, lt) => `欢迎回来，${n}！我是${t}，你的导师。上次我们学习了${tp}。想继续${lt}，还是开始新的话题？`,
+                    ar: (n, t, tp, lt) => `أهلاً بعودتك، ${n}! أنا ${t}، معلمك. في المرة الماضية تناولنا ${tp}. هل تريد المتابعة مع ${lt} أم البدء بشيء جديد؟`,
+                    sw: (n, t, tp, lt) => `Karibu tena, ${n}! Mimi ni ${t}, mwalimu wako. Mara ya mwisho tulisoma ${tp}. Unataka kuendelea na ${lt} au kuanza kitu kipya?`,
+                  };
+                  const multiFn = multiGreetings[lang] || multiGreetings['en'];
+                  return multiFn(name, tutorName, topic, lastTopic);
+                }
+                // Single-topic greeting
                 const continuityGreetings: Record<string, (name: string, tutorName: string, topic: string) => string> = {
-                  en: (n, t, tp) => `Welcome back, ${n}! I'm ${t}, your tutor. Shall we continue our discussion on ${tp}? What do you remember most from last time?`,
-                  es: (n, t, tp) => `¡Bienvenido de nuevo, ${n}! Soy ${t}, tu tutor. ¿Continuamos con nuestra conversación sobre ${tp}? ¿Qué recuerdas de la última vez?`,
-                  fr: (n, t, tp) => `Content de te revoir, ${n}! Je suis ${t}, ton tuteur. On continue notre discussion sur ${tp}? Qu'est-ce que tu te rappelles de la dernière fois?`,
-                  de: (n, t, tp) => `Willkommen zurück, ${n}! Ich bin ${t}, dein Tutor. Sollen wir unsere Diskussion über ${tp} fortsetzen? Woran erinnerst du dich von letztem Mal?`,
-                  pt: (n, t, tp) => `Bem-vindo de volta, ${n}! Sou ${t}, seu tutor. Vamos continuar nossa discussão sobre ${tp}? O que você lembra da última vez?`,
-                  zh: (n, t, tp) => `欢迎回来，${n}！我是${t}，你的导师。我们继续讨论${tp}吧？你还记得上次我们讲了什么吗？`,
-                  ar: (n, t, tp) => `أهلاً بعودتك، ${n}! أنا ${t}، معلمك. هل نستمر في مناقشة ${tp}؟ ماذا تتذكر من المرة الماضية؟`,
-                  sw: (n, t, tp) => `Karibu tena, ${n}! Mimi ni ${t}, mwalimu wako. Tuendelee na mazungumzo yetu kuhusu ${tp}? Unakumbuka nini kutoka mara ya mwisho?`,
+                  en: (n, t, tp) => `Welcome back, ${n}! I'm ${t}, your tutor. Last time we were exploring ${tp}. Want to pick up where we left off, or start something new?`,
+                  es: (n, t, tp) => `¡Bienvenido de nuevo, ${n}! Soy ${t}, tu tutor. La última vez estábamos explorando ${tp}. ¿Quieres continuar donde lo dejamos o empezar algo nuevo?`,
+                  fr: (n, t, tp) => `Content de te revoir, ${n}! Je suis ${t}, ton tuteur. La dernière fois, on explorait ${tp}. Tu veux reprendre là où on s'est arrêtés ou commencer quelque chose de nouveau?`,
+                  de: (n, t, tp) => `Willkommen zurück, ${n}! Ich bin ${t}, dein Tutor. Letztes Mal haben wir ${tp} erkundet. Möchtest du dort weitermachen oder etwas Neues anfangen?`,
+                  pt: (n, t, tp) => `Bem-vindo de volta, ${n}! Sou ${t}, seu tutor. Da última vez estávamos explorando ${tp}. Quer continuar de onde paramos ou começar algo novo?`,
+                  zh: (n, t, tp) => `欢迎回来，${n}！我是${t}，你的导师。上次我们在探索${tp}。想继续上次的内容，还是开始新的话题？`,
+                  ar: (n, t, tp) => `أهلاً بعودتك، ${n}! أنا ${t}، معلمك. في المرة الماضية كنا نستكشف ${tp}. هل تريد المتابعة من حيث توقفنا أم البدء بشيء جديد؟`,
+                  sw: (n, t, tp) => `Karibu tena, ${n}! Mimi ni ${t}, mwalimu wako. Mara ya mwisho tulikuwa tukichunguza ${tp}. Unataka kuendelea tulipoacha au kuanza kitu kipya?`,
                 };
                 const continuityFn = continuityGreetings[lang] || continuityGreetings['en'];
                 return continuityFn(name, tutorName, topic);
@@ -5422,7 +5646,7 @@ HONESTY INSTRUCTIONS:
             if (!shouldSkipGreeting) {
               const greetingMode = greetingDocTitles.length > 0 ? 'ACTIVE_DOCS' : (hasPriorSessions && continuityTopic ? 'CONTINUITY' : 'GENERIC');
               console.log(`[GREETING_PRIORITY] mode=${greetingMode}, activeDocTitles=${greetingDocTitles.length}, hasPrior=${hasPriorSessions}, topic=${continuityTopic || 'none'}`);
-              greeting = getLocalizedGreeting(state.language, state.studentName, personality.name, state.ageGroup, greetingDocTitles, hasPriorSessions, continuityTopic);
+              greeting = getLocalizedGreeting(state.language, state.studentName, personality.name, state.ageGroup, greetingDocTitles, hasPriorSessions, continuityTopic, continuityLastTopic, continuityMultiTopic);
               console.log(`[Custom Voice] 🌍 Generated greeting in language: ${state.language}`);
               
               console.log(`[Custom Voice] 👋 Greeting: "${greeting}"`);
@@ -5567,13 +5791,49 @@ HONESTY INSTRUCTIONS:
                   
                   // Common valid short answers — always pass through at any confidence
                   const VALID_SHORT_ANSWERS = new Set([
+                    // Affirmations & negations
                     'yes', 'no', 'yeah', 'yep', 'yup', 'nah', 'nope',
                     'sure', 'ok', 'okay', 'correct', 'right', 'wrong',
                     'true', 'false', 'maybe', 'probably', 'definitely',
+                    'absolutely', 'exactly', 'indeed', 'certainly',
+                    // Frequency & quantity
                     'always', 'never', 'sometimes', 'both', 'neither',
-                    'done', 'ready', 'hello', 'hi', 'thanks', 'please',
+                    'all', 'none', 'some', 'many', 'few', 'most',
+                    'less', 'more', 'each', 'every', 'enough',
+                    // Pronouns & determiners as answers
+                    'nothing', 'everything', 'something', 'anything',
+                    'everyone', 'nobody', 'somebody', 'anybody',
+                    'here', 'there', 'this', 'that', 'those', 'these',
+                    'me', 'him', 'her', 'them', 'us', 'it', 'mine',
+                    // Question words (student repeating/confirming)
+                    'what', 'who', 'why', 'how', 'when', 'where', 'which',
+                    // Session control
                     'stop', 'wait', 'continue', 'repeat', 'again', 'next',
-                    'help', 'skip', 'harder', 'easier',
+                    'help', 'skip', 'harder', 'easier', 'slower', 'faster',
+                    'done', 'ready', 'start', 'finish', 'quit', 'back',
+                    // Greetings & politeness
+                    'hello', 'hi', 'hey', 'bye', 'goodbye', 'thanks',
+                    'please', 'sorry', 'welcome',
+                    // Reactions & feelings
+                    'wow', 'cool', 'nice', 'great', 'awesome', 'perfect',
+                    'good', 'bad', 'fine', 'amazing', 'interesting',
+                    'confused', 'lost', 'stuck', 'unsure', 'understand',
+                    // Academic responses
+                    'agree', 'disagree', 'forgot', 'remember', 'know',
+                    'think', 'guess', 'believe', 'depends', 'different',
+                    'same', 'similar', 'opposite', 'equal', 'zero',
+                    // Ordinals & comparisons
+                    'first', 'second', 'third', 'last',
+                    'bigger', 'smaller', 'higher', 'lower',
+                    // Common single-word subject answers
+                    'water', 'earth', 'sun', 'moon', 'gravity',
+                    'energy', 'light', 'sound', 'heat', 'oxygen',
+                    'north', 'south', 'east', 'west',
+                    'addition', 'subtraction', 'multiplication', 'division',
+                    // Numbers as words
+                    'one', 'two', 'three', 'four', 'five',
+                    'six', 'seven', 'eight', 'nine', 'ten',
+                    'hundred', 'thousand', 'million', 'half', 'double',
                   ]);
                   const isValidShortAnswer = fragmentWords.length === 1 && VALID_SHORT_ANSWERS.has(fragmentWords[0]);
                   
@@ -6049,47 +6309,55 @@ HONESTY INSTRUCTIONS:
                 },
                 (sessionId) => {
                   console.log('[AssemblyAI] 🎬 Session started:', sessionId);
+                  state.sttBeginReceived = true;
+                  // Trigger paced replay of recent audio after Begin
+                  const epoch = state.sttEpoch;
+                  if (state.reconnectInFlight) {
+                    void replayRecentAudioAfterBegin(state, epoch).then(() => {
+                      if (epoch === state.sttEpoch) {
+                        state.reconnectInFlight = false;
+                        state.sttReconnectAttempts = 0;
+                      }
+                    });
+                  }
                 },
                 undefined,
                 state.ageGroup,
                 (text, prevText) => creditSttActivity(state, text, prevText),
                 () => {
+                  state.sttEpoch++;
                   state.sttConnected = true;
                   state.sttLastMessageAtMs = Date.now();
                   state.sttReconnectAttempts = 0;
                   state.sttDisconnectedSinceMs = null;
                   markProgress(state);
                   state.sttConnectionId++;
-                  console.log(`[STT] connected sessionId=${state.sessionId} connectionId=${state.sttConnectionId}`);
+                  console.log(`[STT] connected sessionId=${state.sessionId} connectionId=${state.sttConnectionId} epoch=${state.sttEpoch}`);
                   sendWsEvent(ws, 'stt_status', { status: 'connected' });
-                  if (state.sttAudioRingBuffer.length > 0) {
-                    console.log(`[STT] flushing ${state.sttAudioRingBuffer.length} buffered audio chunks after reconnect`);
-                    for (const chunk of state.sttAudioRingBuffer) {
-                      if (state.assemblyAIWs && state.assemblyAIWs.readyState === WebSocket.OPEN) {
-                        state.assemblyAIWs.send(chunk);
-                      }
-                    }
-                    state.sttAudioRingBuffer = [];
-                  }
+                  // Replay moved to replayRecentAudioAfterBegin() — runs after Begin, not onOpen
                 },
                 () => {
                   state.sttLastMessageAtMs = Date.now();
                   state.sttConsecutiveSendFailures = 0;
                   markProgress(state);
+                  // SPEECH WATCHDOG: Transcript arrived — reset timer and segment count
+                  if (state.speechWatchdogTimerId) {
+                    clearTimeout(state.speechWatchdogTimerId);
+                    state.speechWatchdogTimerId = null;
+                  }
+                  state.speechWatchdogSegments = 0;
                 },
                 state.sttKeytermsDisabledForSession ? null : state.sttKeytermsJson
               );
-              
+
               console.log('[AssemblyAI] createAssemblyAIConnection returned successfully');
               state.assemblyAIWs = assemblyWs;
               state.assemblyAIState = assemblyState;
               console.log('[AssemblyAI] AssemblyAI WS assigned to state');
               
-              const STT_RING_BUFFER_MAX = 16;
               const STT_DEADMAN_INTERVAL_MS = 2000;
-              // PATIENCE FIX: Was 8s — too short, fired mid-utterance when student paused. AssemblyAI max_turn_silence=6s, so 15s gives ample time before treating connection as stalled.
-              const STT_DEADMAN_NO_MESSAGE_MS = 15000;
-              const STT_DEADMAN_AUDIO_RECENCY_MS = 3000;
+              // Deadman constants: STT_FALLBACK_DEADMAN_MS (30s safety net)
+              // Speech watchdog removed — fresh STT per listening window eliminates stale connections
               const STT_MAX_RECONNECT_ATTEMPTS = 5;
               const STT_RECONNECT_BACKOFF = [250, 500, 1000, 2000, 4000];
               
@@ -6099,6 +6367,7 @@ HONESTY INSTRUCTIONS:
                   return;
                 }
                 if (state.sttReconnectTimerId) return;
+                if (state.reconnectInFlight) return;
                 
                 state.sttReconnectAttempts++;
                 const attempt = state.sttReconnectAttempts;
@@ -6106,10 +6375,17 @@ HONESTY INSTRUCTIONS:
                 if (attempt > STT_MAX_RECONNECT_ATTEMPTS) {
                   console.error(`[STT] reconnect_exhausted attempts=${attempt} sessionId=${state.sessionId}`);
                   state.isReconnecting = false;
+                  state.reconnectInFlight = false;
                   sendWsEvent(ws, 'stt_status', { status: 'failed', attempts: attempt });
                   ws.send(JSON.stringify({ type: "error", error: "Speech service connection lost. Please restart the session." }));
                   return;
                 }
+
+                // Send ForceEndpoint + Terminate before closing old connection
+                const closingEpoch = state.sttEpoch;
+                sendAssemblyAIForceEndpoint(state, closingEpoch);
+                sendAssemblyAITerminate(state, closingEpoch);
+                state.reconnectInFlight = true;
                 
                 const backoffMs = STT_RECONNECT_BACKOFF[Math.min(attempt - 1, STT_RECONNECT_BACKOFF.length - 1)];
                 console.log(`[STT] reconnecting attempt=${attempt}/${STT_MAX_RECONNECT_ATTEMPTS} backoffMs=${backoffMs} sessionId=${state.sessionId}`);
@@ -6233,38 +6509,48 @@ HONESTY INSTRUCTIONS:
                         }
                       },
                       (error) => console.error('[STT] reconnect_error:', error),
-                      (sessionId) => console.log('[STT] reconnected sttSessionId:', sessionId),
+                      (sessionId) => {
+                        console.log('[STT] reconnected sttSessionId:', sessionId);
+                        state.sttBeginReceived = true;
+                        // Trigger paced replay after Begin
+                        const epoch = state.sttEpoch;
+                        void replayRecentAudioAfterBegin(state, epoch).then(() => {
+                          if (epoch === state.sttEpoch) {
+                            state.reconnectInFlight = false;
+                            state.sttReconnectAttempts = 0;
+                          }
+                        });
+                      },
                       undefined,
                       state.ageGroup,
                       (text, prevText) => creditSttActivity(state, text, prevText),
                       () => {
+                        state.sttEpoch++;
                         state.sttConnected = true;
                         state.sttLastMessageAtMs = Date.now();
                         state.sttReconnectAttempts = 0;
                         state.sttDisconnectedSinceMs = null;
                         markProgress(state);
                         state.sttConnectionId++;
-                        console.log(`[STT] reconnected sessionId=${state.sessionId} connectionId=${state.sttConnectionId}`);
+                        console.log(`[STT] reconnected sessionId=${state.sessionId} connectionId=${state.sttConnectionId} epoch=${state.sttEpoch}`);
                         if (state.watchdogRecoveries > 0) {
                           console.log(`[WATCHDOG_RECOVERY_SUCCESS] sessionId=${state.sessionId} recovery=${state.watchdogRecoveries}`);
                           sendWsEvent(ws, 'voice_status', { status: 'audio_restored' });
                         }
                         sendWsEvent(ws, 'stt_status', { status: 'connected' });
-                        if (state.sttAudioRingBuffer.length > 0) {
-                          console.log(`[STT] flushing ${state.sttAudioRingBuffer.length} buffered audio chunks after reconnect`);
-                          for (const chunk of state.sttAudioRingBuffer) {
-                            if (state.assemblyAIWs && state.assemblyAIWs.readyState === WebSocket.OPEN) {
-                              state.assemblyAIWs.send(chunk);
-                            }
-                          }
-                          state.sttAudioRingBuffer = [];
-                        }
+                        // Replay moved to replayRecentAudioAfterBegin() — runs after Begin, not onOpen
                         state.isReconnecting = false;
                       },
                       () => {
                         state.sttLastMessageAtMs = Date.now();
                         state.sttConsecutiveSendFailures = 0;
                         markProgress(state);
+                        // SPEECH WATCHDOG: Transcript arrived — reset timer and segment count
+                        if (state.speechWatchdogTimerId) {
+                          clearTimeout(state.speechWatchdogTimerId);
+                          state.speechWatchdogTimerId = null;
+                        }
+                        state.speechWatchdogSegments = 0;
                       },
                       // P0.5: Reconnect preserves keyterms when valid, omits when disabled
                       state.sttKeytermsDisabledForSession ? null : state.sttKeytermsJson
@@ -6284,12 +6570,21 @@ HONESTY INSTRUCTIONS:
                 }, backoffMs);
               };
               
+              // Store reconnect function on state so it's accessible from processTranscriptQueue
+              // (which is defined earlier in the file and can't access this const directly)
+              state.sttReconnectFn = sttReconnect;
+              
               const handleSttDisconnect = (code?: number, reason?: string) => {
                 state.sttConnected = false;
+                state.sttBeginReceived = false;
                 state.sttDisconnectedSinceMs = Date.now();
                 // P0.4: Clear ws reference on disconnect to prevent stale sends
                 state.assemblyAIWs = null;
-                console.log(`[STT] disconnected code=${code} reason=${reason || 'none'} sessionId=${state.sessionId}`);
+                // Clear reconnectInFlight if Begin was never received for this connection
+                if (state.reconnectInFlight) {
+                  state.reconnectInFlight = false;
+                }
+                console.log(`[STT] disconnected code=${code} reason=${reason || 'none'} epoch=${state.sttEpoch} sessionId=${state.sessionId}`);
                 sendWsEvent(ws, 'stt_status', { status: 'disconnected', code, reason });
                 
                 // P0.3: Handle 3005 as fatal config error (keyterms validation failure)
@@ -6312,10 +6607,10 @@ HONESTY INSTRUCTIONS:
                   persistTranscript(state.sessionId, state.transcript).catch(() => {});
                 }
                 
-                if (!state.isSessionEnded && state.sessionId && state.sttReconnectEnabled && state.phase !== 'FINALIZING') {
+                if (!state.isSessionEnded && state.sessionId && state.sttReconnectEnabled && state.phase !== 'FINALIZING' && state.phase !== 'TUTOR_SPEAKING') {
                   sttReconnect();
                 } else {
-                  console.log(`[STT] reconnect_skipped reason=${state.isSessionEnded ? 'session_ended' : !state.sttReconnectEnabled ? 'reconnect_disabled' : 'finalizing'} phase=${state.phase}`);
+                  console.log(`[STT] reconnect_skipped reason=${state.isSessionEnded ? 'session_ended' : !state.sttReconnectEnabled ? 'reconnect_disabled' : state.phase === 'TUTOR_SPEAKING' ? 'tutor_speaking_teardown' : 'finalizing'} phase=${state.phase}`);
                 }
               };
               
@@ -6329,39 +6624,36 @@ HONESTY INSTRUCTIONS:
               });
               
               state.sttDeadmanTimerId = setInterval(() => {
+                const now = Date.now();
+
                 if (state.isSessionEnded || !state.sttConnected || state.phase === 'FINALIZING' || !state.sttReconnectEnabled || state.sessionFinalizing) return;
                 
-                if (state.tutorAudioPlaying) {
-                  console.log(`[STT] deadman_suppressed reason=tutor_speaking phase=${state.phase} sessionId=${state.sessionId}`);
-                  return;
-                }
+                if (state.phase === 'TUTOR_SPEAKING' || state.tutorAudioPlaying) return;
+
+                if (state.reconnectInFlight) return;
                 
-                const msSinceLastBargeIn = Date.now() - state.lastBargeInAt;
-                if (state.lastBargeInAt > 0 && msSinceLastBargeIn < 5000) {
-                  console.log(`[STT] deadman_suppressed reason=barge_in_recovery msSinceBargeIn=${msSinceLastBargeIn} sessionId=${state.sessionId}`);
-                  return;
-                }
+                const msSinceLastBargeIn = now - state.lastBargeInAt;
+                if (state.lastBargeInAt > 0 && msSinceLastBargeIn < 5000) return;
                 
-                // GPT rec: suppress deadman when student has spoken but not finished.
-                // pendingTranscript has content means AssemblyAI already returned text
-                // for this turn — killing STT now risks losing the partial.
-                // The continuation guard or stall escape will handle completion.
-                if (pendingTranscript.trim().length > 0) {
-                  console.log(`[STT] deadman_suppressed reason=pending_transcript text="${pendingTranscript.substring(0, 40)}" sessionId=${state.sessionId}`);
-                  return;
-                }
+                // Suppress when student has spoken but not finished
+                if (pendingTranscript.trim().length > 0) return;
                 
-                const noMessageMs = Date.now() - state.sttLastMessageAtMs;
-                const audioRecentMs = state.sttLastAudioForwardAtMs > 0 ? Date.now() - state.sttLastAudioForwardAtMs : Infinity;
-                
-                if (noMessageMs > STT_DEADMAN_NO_MESSAGE_MS && audioRecentMs < STT_DEADMAN_AUDIO_RECENCY_MS) {
-                  console.log(`[STT] deadman_trigger noMessageMs=${noMessageMs} audioRecentMs=${audioRecentMs.toFixed(0)} sessionId=${state.sessionId}`);
-                  state.sttConnected = false;
-                  if (state.assemblyAIWs) {
-                    try { state.assemblyAIWs.close(); } catch (_e) {}
-                  }
-                  handleSttDisconnect(undefined, 'deadman_trigger');
+                const noMessageMs = now - state.sttLastMessageAtMs;
+                const audioRecentMs = state.sttLastAudioForwardAtMs > 0 ? now - state.sttLastAudioForwardAtMs : Infinity;
+
+                // FALLBACK DEADMAN ONLY: 30s with no messages and recent audio forwarding.
+                // The speech_watchdog was removed — fresh STT per listening window eliminates
+                // the stale-connection problem it was compensating for.
+                const fallbackDeadman = noMessageMs >= STT_FALLBACK_DEADMAN_MS && audioRecentMs < 3000;
+
+                if (!fallbackDeadman) return;
+
+                console.log(`[STT] stt_deadman_fallback noMessageMs=${noMessageMs} audioRecentMs=${audioRecentMs.toFixed(0)} sessionId=${state.sessionId}`);
+                state.sttConnected = false;
+                if (state.assemblyAIWs) {
+                  try { state.assemblyAIWs.close(); } catch (_e) {}
                 }
+                handleSttDisconnect(undefined, 'stt_deadman_fallback');
               }, STT_DEADMAN_INTERVAL_MS);
               
             } else {
@@ -6714,6 +7006,9 @@ HONESTY INSTRUCTIONS:
               // BARGE-IN: Set phase to TUTOR_SPEAKING so hardInterruptTutor can fire during greeting.
               // Without this the phase stays LISTENING and barge-in is completely blocked.
               setPhase(state, 'TUTOR_SPEAKING', 'greeting_start', ws);
+              state.sttLastUserSpeechSentAtMs = 0;
+              // FRESH STT PER LISTENING WINDOW: Close STT during greeting playback.
+              teardownSttConnection(state, 'greeting_start');
               state.tutorAudioPlaying = true;
               state.tutorAudioStartMs = Date.now();
               
@@ -6737,20 +7032,20 @@ HONESTY INSTRUCTIONS:
                   
                   chunkIndex++;
                   const chunkStart = Date.now();
-                  
+
                   const audioBuffer = await generateSpeech(sentence, state.ageGroup, state.speechSpeed);
                   const chunkMs = Date.now() - chunkStart;
                   totalGreetingAudioBytes += audioBuffer.length;
-                  
+
                   // Check again after TTS (barge-in may have fired while generating)
                   if (greetingAc.signal.aborted) {
                     greetingInterrupted = true;
                     console.log(`[Greeting Chunking] ⚡ Greeting interrupted mid-chunk ${chunkIndex} by barge-in`);
                     break;
                   }
-                  
+
                   console.log(`[Greeting Chunking] 🔊 Chunk ${chunkIndex}/${greetingSentences.length}: ${chunkMs}ms, ${audioBuffer.length} bytes | "${sentence.substring(0, 50)}..."`);
-                  
+
                   ws.send(JSON.stringify({
                     type: "audio",
                     data: audioBuffer.toString("base64"),
@@ -6771,6 +7066,12 @@ HONESTY INSTRUCTIONS:
                 if (!greetingInterrupted) {
                   setPhase(state, 'LISTENING', 'greeting_complete', ws);
                   state.tutorAudioPlaying = false;
+                  state.sttLastMessageAtMs = Date.now();
+                  // FRESH STT PER LISTENING WINDOW: Open new connection after greeting.
+                  if (USE_ASSEMBLYAI && !state.reconnectInFlight && state.sttReconnectFn) {
+                    state.sttReconnectAttempts = 0;
+                    state.sttReconnectFn();
+                  }
                 }
                 if (state.ttsAbortController === greetingAc) {
                   state.ttsAbortController = null;
@@ -6824,14 +7125,10 @@ HONESTY INSTRUCTIONS:
             
             if (state.isReconnecting) {
               // PATIENCE FIX: Buffer audio during reconnect instead of dropping it.
-              // Previously ALL speech was lost while AssemblyAI reconnected (~250ms-1s).
-              // Now we push to the ring buffer so it flushes to the new connection on open.
+              // PcmRingBuffer handles overflow internally.
               if (message.data) {
                 const buf = Buffer.from(message.data, 'base64');
                 state.sttAudioRingBuffer.push(buf);
-                if (state.sttAudioRingBuffer.length > 64) {
-                  state.sttAudioRingBuffer.shift(); // keep last ~4s at 16ms/chunk
-                }
                 state.sttLastAudioForwardAtMs = Date.now(); // prevent false deadman
                 markProgress(state);
               }
@@ -7018,13 +7315,20 @@ HONESTY INSTRUCTIONS:
                   if (state.phase === 'LISTENING') {
                     setPhase(state, 'SPEECH_DETECTED', 'vad_speech_onset', ws);
                   }
+                  // SPEECH WATCHDOG: Removed — was racing with reconnect logic and killing connections.
+                  // The underlying stale-STT issue was caused by u3-rt-pro model, now removed.
                 } else if (!speechDetection.isSpeech && state.lastSpeechNotificationSent) {
                   state.lastSpeechNotificationSent = false;
                   ws.send(JSON.stringify({ type: "speech_ended" }));
                   cancelBargeInCandidate(state, 'speech_ended', ws);
+                  // DO NOT send ForceEndpoint here — our energy-based VAD fires on micro-pauses
+                  // in natural speech (breathing, hesitation between words). Forcing AssemblyAI
+                  // to commit at each pause splits utterances mid-sentence ("I said" without "math").
+                  // Let AssemblyAI's own turn detection (semantic + acoustic) own turn boundaries.
                   if (state.phase === 'SPEECH_DETECTED') {
                     setPhase(state, 'LISTENING', 'vad_speech_ended', ws);
                   }
+                  // SPEECH WATCHDOG: Removed (see speech onset comment above)
                 }
                 
                 // Only log detailed audio analysis occasionally (every ~50th chunk to reduce noise)
@@ -7050,7 +7354,10 @@ HONESTY INSTRUCTIONS:
                 
                 // Send to appropriate STT provider
                 if (USE_ASSEMBLYAI) {
-                  const sent = sendAudioToAssemblyAI(state.assemblyAIWs, audioBuffer, state.assemblyAIState || undefined, state);
+                  // Guards (TUTOR_SPEAKING, sttBeginReceived, epoch, reconnectInFlight)
+                  // are now inside sendAudioToAssemblyAI. Ring buffer is always kept warm.
+                  const isSpeechFrame = Boolean(speechDetection?.isSpeech);
+                  const sent = sendAudioToAssemblyAI(state.assemblyAIWs, audioBuffer, state.assemblyAIState || undefined, state, isSpeechFrame);
                   if (sent && (state.audioFrameCount <= 2 || state.audioFrameCount % 100 === 0)) {
                     console.log('[Custom Voice] ✅ Audio forwarded to AssemblyAI');
                   }
@@ -7586,16 +7893,7 @@ DOCUMENT ACKNOWLEDGMENT RULE:
                   }
                   
                   console.log(`[Custom Voice] 📚 System instruction updated with ${state.uploadedDocuments.length} documents`);
-
-                  // Re-append academic context after mid-session prompt rebuild
-                  if (state.userId) {
-                    try {
-                      const { getAcademicContextForVoice } = await import('./academic');
-                      const academicCtx = await getAcademicContextForVoice(state.userId);
-                      if (academicCtx) state.systemInstruction += academicCtx;
-                    } catch (_) { /* skip */ }
-                  }
-
+                  
                   // Send acknowledgment via voice — content-focused, no filename listing
                   const ackMessage = `I've loaded your new document. What would you like to work on from it?`;
                   
