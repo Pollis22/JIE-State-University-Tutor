@@ -1,7 +1,7 @@
 import { Suspense, ComponentType, LazyExoticComponent, Component as ReactComponent } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { Loader2, AlertCircle, RefreshCw } from "lucide-react";
-import { Redirect, Route } from "wouter";
+import { Redirect, Route, useLocation } from "wouter";
 
 type LazyOrRegularComponent = ComponentType<any> | LazyExoticComponent<ComponentType<any>>;
 
@@ -67,6 +67,16 @@ function ComponentWrapper({ Component }: { Component: LazyOrRegularComponent }) 
   );
 }
 
+// Save intended destination before redirecting to auth
+function RedirectToAuth({ intendedPath }: { intendedPath: string }) {
+  // Only save non-auth paths worth redirecting back to
+  const skipPaths = ['/auth', '/login', '/', ''];
+  if (!skipPaths.includes(intendedPath)) {
+    sessionStorage.setItem('jie_redirect_after_login', intendedPath);
+  }
+  return <Redirect to="/auth" />;
+}
+
 export function ProtectedRoute({
   path,
   component: Component,
@@ -75,6 +85,7 @@ export function ProtectedRoute({
   component: LazyOrRegularComponent;
 }) {
   const { user, isLoading } = useAuth();
+  const [location] = useLocation();
 
   if (isLoading) {
     return (
@@ -89,7 +100,7 @@ export function ProtectedRoute({
   if (!user) {
     return (
       <Route path={path}>
-        <Redirect to="/auth" />
+        <RedirectToAuth intendedPath={location} />
       </Route>
     );
   }
