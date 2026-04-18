@@ -272,7 +272,7 @@ router.post("/courses/:id/syllabus", async (req, res) => {
     // Call Claude to extract structured data
     const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
     const response = await anthropic.messages.create({
-      model: "claude-sonnet-4-20250514",
+      model: "claude-sonnet-4-6",
       max_tokens: 4096,
       system: "You are an academic syllabus parser. Extract structured information from course syllabi. Return ONLY valid JSON, no markdown or explanation.",
       messages: [{
