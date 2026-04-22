@@ -7,7 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { useEffect, useState } from "react";
-import { Eye, EyeOff, Mic, Brain, ArrowRight, GraduationCap, FlaskConical, CheckCircle, X, Shield, Sparkles, TrendingUp, Clock, BookOpen, Menu, Calendar } from "lucide-react";
+import { Eye, EyeOff, Mic, Brain, ArrowRight, GraduationCap, FlaskConical, CheckCircle, X, Shield, Sparkles, TrendingUp, Clock, BookOpen, Menu, Calendar, Target, Bell, BarChart3 } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -43,7 +43,7 @@ const registerSchema = z.object({
 type LoginForm = z.infer<typeof loginSchema>;
 type RegisterForm = z.infer<typeof registerSchema>;
 
-/* ─── Photo Collage — responsive grid, no absolute positioning ─── */
+/* ─── Photo Collage ─── */
 function PhotoCollage() {
   return (
     <section className="py-12 md:py-16 px-4 md:px-12 max-w-7xl mx-auto" style={{ background: "#FFFFFF" }}>
@@ -52,50 +52,43 @@ function PhotoCollage() {
           Where students study hard & play harder
         </h2>
         <p style={{ fontSize: 16, color: "#646569", maxWidth: 520, margin: "0 auto", lineHeight: 1.6, padding: "0 8px" }}>
-          From lecture halls to campus events — students bring that energy everywhere. Now your AI tutor keeps up too.
+          From lecture halls to campus events — students bring that energy everywhere. Your Student Relationship Manager keeps up, wherever learning happens.
         </p>
       </div>
 
-      {/* Grid layout — works on all screen sizes */}
       <div className="max-w-4xl mx-auto grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
-        {/* Bascom Hall — spans 2 cols on mobile, 2 on desktop */}
         <div className="col-span-2 rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.01]"
           style={{ border: "3px solid white", boxShadow: "0 12px 40px rgba(0,0,0,0.12)", transform: "rotate(-1deg)" }}>
-          <img src={bascomHall} alt="University of Wisconsin campus" className="w-full h-48 md:h-64 object-cover" />
+          <img src={bascomHall} alt="State University campus" className="w-full h-48 md:h-64 object-cover" />
           <div style={{ height: 4, background: "#C5050C" }} />
         </div>
 
-        {/* Campus classroom */}
         <div className="rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.03]"
           style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(2deg)" }}>
           <img src={buckyClassroom} alt="Students in classroom" className="w-full h-48 md:h-64 object-cover" />
         </div>
 
-        {/* Campus sports */}
         <div className="rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.03]"
           style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(-1.5deg)" }}>
           <img src={buckyBasketball} alt="Students at sports event" className="w-full h-36 md:h-48 object-cover" />
         </div>
 
-        {/* Campus sports */}
         <div className="rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.03]"
           style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(1.5deg)" }}>
           <img src={buckyFootball} alt="Students at sports event" className="w-full h-36 md:h-48 object-cover" />
         </div>
 
-        {/* Campus lecture */}
         <div className="rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.03]"
           style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(-2deg)" }}>
           <img src={buckyLecture} alt="Students in lecture hall" className="w-full h-36 md:h-48 object-cover" />
         </div>
       </div>
 
-      {/* Floating quote — below grid on mobile, overlaid on desktop */}
       <div className="max-w-4xl mx-auto mt-6 md:mt-8">
         <div className="mx-auto px-5 py-3.5 rounded-xl shadow-md inline-block"
           style={{ background: "rgba(255,255,255,0.95)", border: "1px solid rgba(197,5,12,0.12)", transform: "rotate(-0.5deg)", borderLeft: "3px solid #C5050C" }}>
           <p style={{ fontFamily: "'Red Hat Text', sans-serif", fontSize: 14, fontStyle: "italic", color: "#282728", lineHeight: 1.5, fontWeight: 500 }}>
-            "Like having a tutor available 24/7 — right from my dorm room."
+            "It's not just a tutor — it knows my whole semester. Every deadline, every exam, every gap. Game changer."
           </p>
           <p style={{ fontSize: 12, color: "#646569", marginTop: 4, fontWeight: 600 }}>— Junior, Biology</p>
         </div>
@@ -154,9 +147,21 @@ export default function AuthPage() {
 
   useEffect(() => {
     if (user) {
+      // Post-login routing:
+      //   - Admins → /admin
+      //   - Students → /tutor ALWAYS, except when they intentionally deep-linked
+      //     to a whitelisted destination before logging in.
+      const WHITELIST = ["/tutor", "/academic-dashboard", "/settings"];
       const savedRedirect = sessionStorage.getItem("jie_redirect_after_login");
       sessionStorage.removeItem("jie_redirect_after_login");
-      setLocation(user.isAdmin ? "/admin" : savedRedirect || "/tutor");
+
+      if ((user as any).isAdmin) {
+        setLocation("/admin");
+      } else if (savedRedirect && WHITELIST.includes(savedRedirect)) {
+        setLocation(savedRedirect);
+      } else {
+        setLocation("/tutor");
+      }
     }
   }, [user, setLocation]);
 
@@ -201,10 +206,8 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-screen" style={{ background: "#FFFFFF", fontFamily: "'Red Hat Text', 'Source Sans 3', sans-serif" }}>
-      {/* Red top bar */}
       <div className="fixed top-0 left-0 right-0 z-[60]" style={{ height: 4, background: "#C5050C" }} />
 
-      {/* Nav — mobile responsive */}
       <nav className="fixed top-1 left-0 right-0 z-50 transition-all duration-300"
         style={{
           background: "rgba(255,255,255,0.97)",
@@ -214,14 +217,13 @@ export default function AuthPage() {
         }}>
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2 md:gap-4 min-w-0">
-            <img src={suLogo} alt="University of Wisconsin" className="h-12 md:h-20 object-contain flex-shrink-0" />
+            <img src={suLogo} alt="State University" className="h-12 md:h-20 object-contain flex-shrink-0" />
             <div className="hidden sm:block" style={{ borderLeft: "1px solid #DAD7CB", paddingLeft: 12 }}>
-              <div style={{ fontFamily: "'Red Hat Display', sans-serif", fontWeight: 700, fontSize: 16, color: "#282728", lineHeight: 1.1 }}>AI Tutor</div>
+              <div style={{ fontFamily: "'Red Hat Display', sans-serif", fontWeight: 700, fontSize: 16, color: "#282728", lineHeight: 1.1 }}>Academic SRM + AI Tutor</div>
               <div style={{ fontSize: 10, color: "#646569", fontWeight: 500, letterSpacing: 1, textTransform: "uppercase" }}>Powered by JIE Mastery</div>
             </div>
           </div>
-          
-          {/* Navigation Links */}
+
           <div className="hidden lg:flex items-center gap-1 flex-1 justify-center">
             {[
               { label: "Features", path: "/features" },
@@ -263,30 +265,22 @@ export default function AuthPage() {
               </button>
             ))}
           </div>
-          
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <Button onClick={() => { setActiveTab("login"); document.getElementById("auth-section")?.scrollIntoView({ behavior: "smooth" }); }}
-              className="text-white font-semibold px-4 md:px-6 py-2 rounded-lg text-sm" style={{ background: "#C5050C" }}>Sign In</Button>
-            {/* Hamburger — mobile only */}
-            <button
-              className="lg:hidden flex items-center justify-center w-9 h-9 rounded-lg"
-              style={{ background: "transparent", border: "1px solid #E8E8E8", color: "#282728" }}
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              aria-label="Open menu"
-            >
-              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+
+          <div className="flex items-center gap-2 md:gap-3">
+            <Button
+              onClick={() => { setActiveTab("login"); document.getElementById("auth-section")?.scrollIntoView({ behavior: "smooth" }); }}
+              className="text-white font-semibold px-4 md:px-5 py-2 rounded-lg text-xs md:text-sm"
+              style={{ background: "#C5050C" }}>
+              Sign In
+            </Button>
+            <button className="lg:hidden p-2 rounded-md" onClick={() => setMobileMenuOpen(!mobileMenuOpen)} aria-label="Menu">
+              <Menu className="w-5 h-5" style={{ color: "#282728" }} />
             </button>
           </div>
         </div>
-      </nav>
 
-      {/* Mobile slide-down menu */}
-      {mobileMenuOpen && (
-        <div
-          className="lg:hidden fixed left-0 right-0 z-40"
-          style={{ top: 68, background: "#FFFFFF", borderBottom: "2px solid #C5050C", boxShadow: "0 8px 32px rgba(0,0,0,0.12)" }}
-        >
-          <div className="px-4 py-4 space-y-1">
+        {mobileMenuOpen && (
+          <div className="lg:hidden mt-3 pb-3 border-t pt-3" style={{ borderColor: "rgba(0,0,0,0.06)" }}>
             {[
               { label: "Features", path: "/features" },
               { label: "Academic SRM", path: "/srm" },
@@ -303,74 +297,76 @@ export default function AuthPage() {
                   if (hash) setTimeout(() => document.getElementById(hash)?.scrollIntoView({ behavior: "smooth" }), 500);
                   setMobileMenuOpen(false);
                 }}
-                className="w-full text-left px-4 py-3 rounded-lg flex items-center gap-3"
-                style={{
-                  fontFamily: "'Red Hat Text', sans-serif",
-                  fontSize: 15,
-                  fontWeight: 600,
-                  color: "#282728",
-                  background: "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  borderBottom: "1px solid #F0F0F0",
-                }}
+                className="block w-full text-left px-4 py-3 text-sm font-medium"
+                style={{ color: "#282728", borderBottom: "1px solid rgba(0,0,0,0.04)" }}
               >
                 {item.label}
               </button>
             ))}
-            {/* CTA row */}
-            <div className="pt-3 pb-1 flex gap-2">
-              <Button
-                className="flex-1 text-white font-semibold rounded-lg"
-                style={{ background: "#C5050C" }}
-                onClick={() => { setActiveTab("login"); setMobileMenuOpen(false); document.getElementById("auth-section")?.scrollIntoView({ behavior: "smooth" }); }}
-              >
-                Sign In
-              </Button>
-              <Button
-                variant="outline"
-                className="flex-1 font-semibold rounded-lg"
-                style={{ borderColor: "#C5050C", color: "#C5050C" }}
-                onClick={() => { setActiveTab("register"); setMobileMenuOpen(false); document.getElementById("auth-section")?.scrollIntoView({ behavior: "smooth" }); }}
-              >
-                Register
-              </Button>
-            </div>
+          </div>
+        )}
+      </nav>
+
+      {verificationStatus === "success" && (
+        <div className="fixed top-16 left-0 right-0 z-40 px-4">
+          <div className="max-w-xl mx-auto p-3 rounded-lg shadow-lg" style={{ background: "#E8F5E9", border: "1px solid #28A745" }}>
+            <p className="text-sm font-semibold" style={{ color: "#1B5E20" }}>Email verified! You can now sign in.</p>
           </div>
         </div>
       )}
 
-      {/* Hero — graduation photo visible on ALL screens */}
-      <section className="relative" style={{ paddingTop: 100, paddingBottom: 40, background: "#FFFFFF" }}>
+      {/* HERO — SRM-FIRST */}
+      <section className="relative" style={{ paddingTop: 100, paddingBottom: 40, background: "linear-gradient(180deg, #FFFFFF 0%, #FFF5F5 100%)" }}>
         <div className="max-w-7xl mx-auto px-4 md:px-12">
-          {/* Mobile: stacked. Desktop: side by side */}
+          <div className="flex justify-center mb-8">
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full" style={{ background: "rgba(197,5,12,0.08)", border: "1px solid rgba(197,5,12,0.2)" }}>
+              <Sparkles className="w-3.5 h-3.5" style={{ color: "#C5050C" }} />
+              <span style={{ fontSize: 12, fontWeight: 700, color: "#C5050C", textTransform: "uppercase", letterSpacing: 1 }}>
+                The Next Generation of Academic Support
+              </span>
+            </div>
+          </div>
+
           <div className="grid md:grid-cols-2 gap-8 md:gap-12 items-center">
             <div style={{ animation: "fadeInUp 0.8s ease" }}>
-              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-6" style={{ background: "rgba(197,5,12,0.08)", border: "1px solid rgba(197,5,12,0.15)" }}>
-                <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: "#28A745" }} />
-                <span style={{ fontSize: 12, fontWeight: 600, color: "#C5050C" }}>Available 24/7 for University of Wisconsin Students</span>
-              </div>
-              <h1 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(32px, 5vw, 56px)", fontWeight: 800, lineHeight: 1.08, color: "#282728", marginBottom: 20, letterSpacing: -1.5 }}>
-                Your Personal<br /><span style={{ color: "#C5050C" }}>AI Tutor</span>
+              <h1 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(34px, 5.5vw, 60px)", fontWeight: 800, lineHeight: 1.05, color: "#282728", marginBottom: 20, letterSpacing: -1.5 }}>
+                Your Academic<br />
+                <span style={{ color: "#C5050C" }}>Command Center.</span>
               </h1>
-              <p style={{ fontSize: 17, lineHeight: 1.65, color: "#646569", marginBottom: 32, maxWidth: 480 }}>
-                Voice-powered tutoring that adapts to how you learn. Get instant help with coursework across every subject — explained the way you need to hear it.
+              <p style={{ fontSize: 18, lineHeight: 1.55, color: "#282728", marginBottom: 16, maxWidth: 520, fontWeight: 600 }}>
+                The first Student Relationship Manager built for college — with the most advanced AI tutor on the planet baked in.
               </p>
-              <Button onClick={() => { setActiveTab("register"); document.getElementById("auth-section")?.scrollIntoView({ behavior: "smooth" }); }}
-                className="text-white font-semibold px-8 py-3 rounded-lg text-base flex items-center gap-2"
-                style={{ background: "#C5050C", boxShadow: "0 4px 20px rgba(197,5,12,0.3)" }}>
-                Start Tutoring <ArrowRight className="w-4 h-4" />
-              </Button>
+              <p style={{ fontSize: 16, lineHeight: 1.65, color: "#646569", marginBottom: 28, maxWidth: 520 }}>
+                Upload your syllabi and the system builds your entire semester calendar, generates escalating study tasks, scores your engagement in every course, and alerts you before you fall behind — all while your voice tutor walks into every session already knowing what's due.
+              </p>
+
+              <div className="flex flex-col sm:flex-row gap-3 mb-6">
+                <Button onClick={() => { setActiveTab("register"); document.getElementById("auth-section")?.scrollIntoView({ behavior: "smooth" }); }}
+                  className="text-white font-semibold px-7 py-3 rounded-lg text-base flex items-center justify-center gap-2"
+                  style={{ background: "#C5050C", boxShadow: "0 4px 20px rgba(197,5,12,0.3)" }}>
+                  Claim Your Command Center <ArrowRight className="w-4 h-4" />
+                </Button>
+                <Button onClick={() => setLocation("/srm")}
+                  variant="outline"
+                  className="font-semibold px-7 py-3 rounded-lg text-base"
+                  style={{ borderColor: "#C5050C", color: "#C5050C", background: "transparent" }}>
+                  See How the SRM Works
+                </Button>
+              </div>
+
+              <div className="flex items-center gap-4 flex-wrap" style={{ fontSize: 12, color: "#646569" }}>
+                <span className="flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5" style={{ color: "#28A745" }} /> Syllabus → calendar in seconds</span>
+                <span className="flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5" style={{ color: "#28A745" }} /> Voice tutor 24/7</span>
+                <span className="flex items-center gap-1.5"><CheckCircle className="w-3.5 h-3.5" style={{ color: "#28A745" }} /> Every subject, every level</span>
+              </div>
             </div>
 
-            {/* Graduation photo — ALWAYS visible, responsive sizing */}
             <div className="flex justify-center items-center">
               <div className="relative w-full max-w-md">
                 <div className="rounded-2xl overflow-hidden shadow-2xl"
                   style={{ transform: "rotate(1.5deg)", border: "4px solid white", boxShadow: "0 20px 50px rgba(0,0,0,0.14)" }}>
                   <img src={buckyGraduation} alt="Students celebrating graduation" className="w-full h-auto" />
                 </div>
-                {/* Small accent photo — desktop only */}
                 <div className="absolute rounded-lg overflow-hidden shadow-xl hidden md:block"
                   style={{ width: 120, bottom: -16, left: -20, transform: "rotate(-4deg)", border: "3px solid white", boxShadow: "0 10px 25px rgba(0,0,0,0.15)" }}>
                   <img src={buckyTeaching} alt="Students in lab" className="w-full h-auto" />
@@ -381,49 +377,87 @@ export default function AuthPage() {
         </div>
       </section>
 
-      {/* What We Cover — 4-card grid */}
-      <section className="py-12 md:py-20 px-4 md:px-12 max-w-7xl mx-auto" style={{ background: "#FFFFFF" }}>
-        <div className="text-center mb-8 md:mb-12">
-          <h2 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(24px, 3.5vw, 36px)", fontWeight: 800, color: "#282728", lineHeight: 1.15, marginBottom: 8 }}>
-            Every subject. Every level.
-          </h2>
-          <p style={{ fontSize: 16, color: "#646569", maxWidth: 560, margin: "0 auto", lineHeight: 1.6, padding: "0 8px" }}>
-            From freshman coursework to postgrad exam prep — your tutor adapts to wherever you are in your academic journey.
-          </p>
-        </div>
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 md:gap-5">
-          {[
-            { icon: <Mic className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Voice-First Learning", desc: "Speak naturally and get clear, conversational explanations. Like office hours that never close." },
-            { icon: <Brain className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Remembers Your Progress", desc: "Picks up where you left off. Knows your strengths and adapts to your gaps." },
-            { icon: <Calendar className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Academic Command Center", desc: "Upload syllabi, get an auto-built calendar, smart study tasks, and a tutor that knows what's due." },
-            { icon: <FlaskConical className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "All Core Subjects", desc: "Chemistry, Calculus, Physics, Biology, History, Economics, CS, Writing — and more." },
-            { icon: <GraduationCap className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Postgrad Test Prep", desc: "GRE, GMAT, LSAT, MCAT, DAT, PCAT — targeted practice with instant feedback." },
-          ].map((f, i) => (
-            <div key={i} className="rounded-xl md:rounded-2xl p-5 md:p-7 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-default" style={{ background: "#FFFFFF", border: "1px solid #E8E8E8" }}>
-              <div className="w-10 h-10 md:w-12 md:h-12 rounded-lg md:rounded-xl flex items-center justify-center mb-3 md:mb-4" style={{ background: "rgba(197,5,12,0.06)" }}>{f.icon}</div>
-              <h3 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(14px, 2vw, 18px)", fontWeight: 700, marginBottom: 6, color: "#282728" }}>{f.title}</h3>
-              <p className="hidden md:block" style={{ fontSize: 14, lineHeight: 1.6, color: "#646569" }}>{f.desc}</p>
+      {/* SRM PILLARS */}
+      <section className="py-12 md:py-20 px-4 md:px-12" style={{ background: "#FFFFFF" }}>
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-10 md:mb-14">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-4" style={{ background: "rgba(197,5,12,0.08)", border: "1px solid rgba(197,5,12,0.15)" }}>
+              <Target className="w-3.5 h-3.5" style={{ color: "#C5050C" }} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#C5050C", textTransform: "uppercase", letterSpacing: 1 }}>The Five Pillars</span>
             </div>
-          ))}
+            <h2 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(24px, 4vw, 40px)", fontWeight: 800, color: "#282728", lineHeight: 1.15, marginBottom: 8 }}>
+              Everything you need to <span style={{ color: "#C5050C" }}>stay ahead</span> of every course.
+            </h2>
+            <p style={{ fontSize: 16, color: "#646569", maxWidth: 640, margin: "0 auto", lineHeight: 1.6, padding: "0 8px" }}>
+              Five systems working together. Miss nothing. Fall behind on nothing. Walk into every exam prepared.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-5">
+            {[
+              { icon: <Calendar className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Syllabus Parsing", desc: "Paste a syllabus. AI extracts every exam, quiz, assignment, and project date into your calendar — automatically." },
+              { icon: <CheckCircle className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Smart Study Tasks", desc: "Tasks auto-generate 7, 3, and 1 day before every deadline — escalating in priority so the work gets done." },
+              { icon: <BarChart3 className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Engagement Scoring", desc: "A 0–100 weekly score per course tracks sessions, tasks completed, study minutes, and consistency." },
+              { icon: <Mic className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Voice AI Tutor", desc: "A Socratic-method tutor that knows your syllabus, remembers every session, and explains it your way." },
+              { icon: <Bell className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Reminders & Alerts", desc: "In-app and email alerts before every deadline. Advisor alerts when engagement drops. You never miss a thing." },
+            ].map((f, i) => (
+              <div key={i} className="rounded-xl md:rounded-2xl p-5 md:p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl cursor-default" style={{ background: "#FFFFFF", border: "1px solid #E8E8E8" }}>
+                <div className="w-10 h-10 md:w-12 md:h-12 rounded-lg md:rounded-xl flex items-center justify-center mb-3 md:mb-4" style={{ background: "rgba(197,5,12,0.06)" }}>{f.icon}</div>
+                <h3 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(14px, 2vw, 17px)", fontWeight: 700, marginBottom: 6, color: "#282728" }}>{f.title}</h3>
+                <p style={{ fontSize: 13, lineHeight: 1.55, color: "#646569" }}>{f.desc}</p>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
-      {/* Photo Collage */}
+      {/* COVERAGE — every subject, every level */}
+      <section className="py-12 md:py-20 px-4 md:px-12" style={{ background: "#FAFAFA" }}>
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-8 md:mb-12">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-4" style={{ background: "rgba(197,5,12,0.08)", border: "1px solid rgba(197,5,12,0.15)" }}>
+              <BookOpen className="w-3.5 h-3.5" style={{ color: "#C5050C" }} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#C5050C", textTransform: "uppercase", letterSpacing: 1 }}>Covers every subject · every level</span>
+            </div>
+            <h2 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(24px, 4vw, 40px)", fontWeight: 800, color: "#282728", lineHeight: 1.15, marginBottom: 8 }}>
+              From freshman seminars to <span style={{ color: "#C5050C" }}>postgrad exam prep.</span>
+            </h2>
+            <p style={{ fontSize: 16, color: "#646569", maxWidth: 640, margin: "0 auto", lineHeight: 1.6 }}>
+              Whether it's the first week of Econ 101 or three months out from the MCAT, the tutor adapts to where you are in your academic journey.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 max-w-5xl mx-auto">
+            {[
+              { label: "Core Coursework", items: "Chem · Bio · Calc · Physics · CS · Writing · History · Econ" },
+              { label: "Postgrad Test Prep", items: "GRE · GMAT · LSAT · MCAT · DAT · PCAT · OAT" },
+              { label: "Pro & Licensing", items: "CFA · CPA · Series 7 · NCLEX · Praxis · ASWB" },
+              { label: "Languages", items: "Spanish · French · German · Mandarin · and more" },
+            ].map((cat, i) => (
+              <div key={i} className="p-5 rounded-xl transition-all duration-300 hover:-translate-y-1 hover:shadow-lg" style={{ background: "#FFFFFF", border: "1px solid #E8E8E8" }}>
+                <p style={{ fontSize: 11, fontWeight: 700, color: "#C5050C", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>{cat.label}</p>
+                <p style={{ fontSize: 13, color: "#282728", fontWeight: 500, lineHeight: 1.55 }}>{cat.items}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <PhotoCollage />
 
-      {/* SRM SHOWCASE — Academic Command Center */}
+      {/* SRM SHOWCASE */}
       <section className="py-12 md:py-20 px-4 md:px-12" style={{ background: "#FAFAFA" }}>
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-8 md:mb-12">
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full mb-4" style={{ background: "rgba(197,5,12,0.08)", border: "1px solid rgba(197,5,12,0.15)" }}>
               <Calendar className="w-3.5 h-3.5" style={{ color: "#C5050C" }} />
-              <span style={{ fontSize: 12, fontWeight: 600, color: "#C5050C", textTransform: "uppercase", letterSpacing: 1 }}>New: Student Relationship Management</span>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "#C5050C", textTransform: "uppercase", letterSpacing: 1 }}>The Academic Command Center</span>
             </div>
             <h2 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(24px, 4vw, 40px)", fontWeight: 800, color: "#282728", lineHeight: 1.15, marginBottom: 8 }}>
-              Like Having a Personal <span style={{ color: "#C5050C" }}>Academic Advisor</span>
+              A Personal <span style={{ color: "#C5050C" }}>Academic Advisor</span> That Never Sleeps.
             </h2>
             <p style={{ fontSize: 16, color: "#646569", maxWidth: 600, margin: "0 auto", lineHeight: 1.6 }}>
-              Upload your syllabi and your AI tutor becomes a proactive academic coach — knowing every deadline, every exam, and exactly where you need to focus.
+              Upload your syllabi and your SRM becomes a proactive academic coach — knowing every deadline, every exam, and exactly where you need to focus.
             </p>
           </div>
 
@@ -433,7 +467,7 @@ export default function AuthPage() {
               { icon: <CheckCircle className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "Study Tasks That Write Themselves", desc: "7 days before an exam: \"Begin reviewing.\" 3 days: \"Intensive review.\" 1 day: \"Final review.\" Tasks auto-generate with escalating priority — no willpower needed." },
               { icon: <Mic className="w-6 h-6" style={{ color: "#C5050C" }} />, title: "A Tutor That Knows Your Semester", desc: "Start a session and hear: \"You have an Organic Chemistry exam Friday. You've completed 2 of 4 prep tasks. Want to review mechanisms?\" Context-aware from day one." },
             ].map((f, i) => (
-              <div key={i} className="rounded-2xl p-6 md:p-7 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl" style={{ background: "#FFFFFF", border: "1px solid #E8E8E8" }}>
+              <div key={i} className="rounded-2xl p-6 transition-all duration-300 hover:-translate-y-1 hover:shadow-xl" style={{ background: "#FFFFFF", border: "1px solid #E8E8E8" }}>
                 <div className="w-12 h-12 rounded-xl flex items-center justify-center mb-4" style={{ background: "rgba(197,5,12,0.06)" }}>{f.icon}</div>
                 <h3 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: 18, fontWeight: 700, marginBottom: 8, color: "#282728" }}>{f.title}</h3>
                 <p style={{ fontSize: 14, lineHeight: 1.65, color: "#646569" }}>{f.desc}</p>
@@ -487,26 +521,25 @@ export default function AuthPage() {
             Not ChatGPT. Not a Traditional Tutor.
           </h2>
           <p style={{ fontSize: 16, color: "#646569", maxWidth: 560, margin: "0 auto", lineHeight: 1.6 }}>
-            University of Wisconsin AI Tutor combines the best of both — and adds intelligence that neither can offer.
+            State University's Academic SRM combines the best of both — and adds a layer of intelligence neither can offer.
           </p>
         </div>
 
         <div className="max-w-5xl mx-auto rounded-2xl overflow-hidden" style={{ border: "1px solid #E8E8E8", boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
-          {/* Header */}
           <div className="grid grid-cols-4 text-center font-semibold" style={{ borderBottom: "1px solid #E8E8E8" }}>
             <div className="p-3 md:p-4" style={{ background: "#F8F8F8" }}></div>
             <div className="p-3 md:p-4" style={{ background: "#F8F8F8", fontSize: 13, color: "#646569" }}>Traditional Tutoring</div>
             <div className="p-3 md:p-4" style={{ background: "#F8F8F8", fontSize: 13, color: "#646569" }}>ChatGPT</div>
-            <div className="p-3 md:p-4" style={{ background: "rgba(197,5,12,0.06)", fontSize: 13, color: "#C5050C", fontWeight: 700 }}>University of Wisconsin AI Tutor</div>
+            <div className="p-3 md:p-4" style={{ background: "rgba(197,5,12,0.06)", fontSize: 13, color: "#C5050C", fontWeight: 700 }}>State AI Tutor + SRM</div>
           </div>
-          
+
           {[
-            { feature: "Remembers your sessions", trad: "Depends on the tutor", gpt: false, jie: "Builds a knowledge profile across every session" },
-            { feature: "Adapts teaching strategy", trad: "If you're lucky", gpt: false, jie: "Learns what works and adjusts automatically" },
-            { feature: "Tracks mastery over time", trad: false, gpt: false, jie: "0–100% mastery scoring per concept" },
             { feature: "Academic calendar & planning", trad: false, gpt: false, jie: "Syllabus → auto-built calendar with study tasks" },
             { feature: "Knows your upcoming exams", trad: "If you remember to mention it", gpt: false, jie: "Proactively opens sessions with what's due" },
             { feature: "Engagement & risk scoring", trad: false, gpt: false, jie: "0–100 weekly score with advisor alerts" },
+            { feature: "Remembers your sessions", trad: "Depends on the tutor", gpt: false, jie: "Builds a knowledge profile across every session" },
+            { feature: "Adapts teaching strategy", trad: "If you're lucky", gpt: false, jie: "Learns what works and adjusts automatically" },
+            { feature: "Tracks mastery over time", trad: false, gpt: false, jie: "0–100% mastery scoring per concept" },
             { feature: "Every subject, one tutor", trad: false, gpt: "Any topic, no structure", jie: "Full course load — no scheduling specialists" },
             { feature: "Available 24/7", trad: false, gpt: true, jie: "Any time, any device, voice or text" },
             { feature: "Guides reasoning (Socratic)", trad: "Varies", gpt: false, jie: "Never gives answers — builds understanding" },
@@ -520,12 +553,12 @@ export default function AuthPage() {
             <div key={i} className="grid grid-cols-4 text-center" style={{ borderBottom: "1px solid #F0F0F0", background: i % 2 === 0 ? "#FFFFFF" : "#FAFAFA" }}>
               <div className="p-2.5 md:p-3 text-left font-medium" style={{ fontSize: 13, color: "#282728", background: i % 2 === 0 ? "#FAFAFA" : "#F5F5F5" }}>{row.feature}</div>
               <div className="p-2.5 md:p-3 flex items-center justify-center">
-                {row.trad === true ? <CheckCircle className="w-4 h-4" style={{ color: "#646569" }} /> : 
+                {row.trad === true ? <CheckCircle className="w-4 h-4" style={{ color: "#646569" }} /> :
                  row.trad === false ? <X className="w-4 h-4" style={{ color: "#D4D4D4" }} /> :
                  <span style={{ fontSize: 11, color: "#646569" }}>{row.trad}</span>}
               </div>
               <div className="p-2.5 md:p-3 flex items-center justify-center">
-                {row.gpt === true ? <CheckCircle className="w-4 h-4" style={{ color: "#646569" }} /> : 
+                {row.gpt === true ? <CheckCircle className="w-4 h-4" style={{ color: "#646569" }} /> :
                  row.gpt === false ? <X className="w-4 h-4" style={{ color: "#D4D4D4" }} /> :
                  <span style={{ fontSize: 11, color: "#646569" }}>{row.gpt}</span>}
               </div>
@@ -551,7 +584,7 @@ export default function AuthPage() {
               It Gets <span style={{ color: "#C5050C" }}>Smarter</span> Every Session
             </h2>
             <p style={{ fontSize: 16, color: "#646569", maxWidth: 600, margin: "0 auto", lineHeight: 1.6 }}>
-              ChatGPT forgets everything when you close the window. Your University of Wisconsin AI Tutor builds a permanent learning profile that compounds over time.
+              ChatGPT forgets everything when you close the window. Your State University AI Tutor builds a permanent learning profile that compounds over time.
             </p>
           </div>
 
@@ -569,7 +602,6 @@ export default function AuthPage() {
             ))}
           </div>
 
-          {/* Session 1 vs Session 20 */}
           <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8E8E8", boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
             <div className="grid md:grid-cols-2">
               <div className="p-6 md:p-8" style={{ borderBottom: "1px solid #E8E8E8", background: "#FFFFFF" }}>
@@ -595,7 +627,7 @@ export default function AuthPage() {
                   <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm text-white" style={{ background: "#C5050C" }}>20</div>
                   <div>
                     <p style={{ fontWeight: 700, color: "#282728", fontSize: 15 }}>Session 20</p>
-                    <p style={{ fontSize: 12, fontWeight: 600, color: "#C5050C" }}>Only University of Wisconsin AI Tutor can do this</p>
+                    <p style={{ fontSize: 12, fontWeight: 600, color: "#C5050C" }}>Only State University AI Tutor can do this</p>
                   </div>
                 </div>
                 <div className="space-y-2.5">
@@ -616,33 +648,35 @@ export default function AuthPage() {
           </div>
 
           <p className="text-center mt-6" style={{ fontSize: 14, color: "#646569" }}>
-            ChatGPT starts cold every conversation. Your University of Wisconsin AI Tutor has 20 sessions of intelligence about how you learn.
+            ChatGPT starts cold every conversation. Your State University AI Tutor has 20 sessions of intelligence about how you learn.
             <br /><strong style={{ color: "#282728" }}>That gap grows every single session.</strong>
           </p>
         </div>
       </section>
 
-      {/* STUDENT-ATHLETE SECTION */}
+      {/* FOR EVERY STUDENT — general student-body-wide pitch */}
       <section className="py-12 md:py-20 px-4 md:px-12 max-w-7xl mx-auto" style={{ background: "#FFFFFF" }}>
         <div className="max-w-4xl mx-auto">
           <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8E8E8", boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
             <div className="p-2" style={{ background: "#C5050C" }}>
-              <p className="text-center text-white font-bold" style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: 14, letterSpacing: 1, textTransform: "uppercase" }}>For Student Athletes</p>
+              <p className="text-center text-white font-bold" style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: 14, letterSpacing: 1, textTransform: "uppercase" }}>Built for Every Student</p>
             </div>
             <div className="p-6 md:p-10" style={{ background: "#FFF7ED" }}>
               <h3 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(20px, 3vw, 28px)", fontWeight: 800, color: "#282728", marginBottom: 12 }}>
-                Built for Your Schedule, Not the Other Way Around
+                Your SRM Keeps You on Pace — No Matter How Full Your Life Is
               </h3>
               <p style={{ fontSize: 15, color: "#646569", lineHeight: 1.65, marginBottom: 24 }}>
-                Travel schedules, practice commitments, and game-day recovery make office hours nearly impossible. Your AI tutor adapts to your life.
+                Rigorous coursework. Clubs and research labs. Jobs, internships, and family responsibilities. Whatever fills your week, your Student Relationship Manager tracks every deadline and adapts your study plan so nothing slips through the cracks.
               </p>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
-                  { icon: <Clock className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Available 24/7", desc: "Study at 11 PM after a road game. Review before a 6 AM flight. No scheduling conflicts." },
-                  { icon: <Mic className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Travel-Ready", desc: "Voice tutoring on any device. Study by speaking — on the bus, in the hotel, between events." },
-                  { icon: <BookOpen className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Every Subject, One Tutor", desc: "No scheduling three specialists for Econ, Bio, and Spanish. One tutor covers the full course load." },
-                  { icon: <Brain className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Remembers Everything", desc: "Missed two weeks for conference play? The tutor knows exactly where you left off and what gaps need filling." },
+                  { icon: <Clock className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Available 24/7", desc: "Late-night cram sessions, early-morning review before lab, study breaks between meetings. No office hours to miss." },
+                  { icon: <Calendar className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Every Deadline, One Calendar", desc: "Upload each syllabus and watch your semester auto-populate. Exams, papers, quizzes, and projects all in one place." },
+                  { icon: <CheckCircle className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Study Tasks That Find You", desc: "7 days before an exam: review begins. 3 days: intensive prep. 1 day: final push. Your plan writes itself." },
+                  { icon: <Mic className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Voice Tutoring Anywhere", desc: "Study by speaking — on the bus, between classes, while walking home. Any device, any time, hands free." },
+                  { icon: <BookOpen className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Every Subject, One Tutor", desc: "No scheduling three specialists for Chem, Econ, and Spanish. One tutor covers the full course load — freshman through senior year." },
+                  { icon: <Brain className="w-5 h-5" style={{ color: "#C5050C" }} />, title: "Remembers Your Semester", desc: "Missed a week for illness, a conference, or a family trip? The tutor knows exactly where you left off and what gaps need filling." },
                 ].map((f, i) => (
                   <div key={i} className="flex items-start gap-3 p-4 rounded-xl" style={{ background: "rgba(255,255,255,0.8)", border: "1px solid rgba(0,0,0,0.06)" }}>
                     <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: "rgba(197,5,12,0.06)" }}>{f.icon}</div>
@@ -653,13 +687,13 @@ export default function AuthPage() {
                   </div>
                 ))}
               </div>
-              
+
               <div className="mt-6 p-4 rounded-xl" style={{ background: "rgba(197,5,12,0.06)", border: "1px solid rgba(197,5,12,0.12)" }}>
                 <div className="flex items-start gap-3">
                   <Shield className="w-5 h-5 mt-0.5 flex-shrink-0" style={{ color: "#C5050C" }} />
                   <div>
-                    <p style={{ fontWeight: 700, fontSize: 14, color: "#282728", marginBottom: 2 }}>Eligibility Protection</p>
-                    <p style={{ fontSize: 13, color: "#646569", lineHeight: 1.5 }}>Early intervention flags alert academic advisors when a student-athlete shows signs of academic difficulty — weeks before midterm grades. Protect your eligibility proactively.</p>
+                    <p style={{ fontWeight: 700, fontSize: 14, color: "#282728", marginBottom: 2 }}>Early Intervention That Actually Works</p>
+                    <p style={{ fontSize: 13, color: "#646569", lineHeight: 1.5 }}>When your engagement score drops — missed deadlines, declining study time, an exam approaching with zero prep — your advisor sees it weeks before midterm grades arrive. Support kicks in when it can still make a difference, not after it's too late.</p>
                   </div>
                 </div>
               </div>
@@ -693,9 +727,9 @@ export default function AuthPage() {
           <div className="relative p-8 md:p-16 flex flex-col justify-center" style={{ background: "#C5050C" }}>
             <div className="absolute inset-0 opacity-[0.06] pointer-events-none" style={{ backgroundImage: "repeating-linear-gradient(45deg, transparent, transparent 40px, white 40px, white 41px)" }} />
             <div className="relative z-10">
-              <div className="mb-6 md:mb-10" style={{ fontFamily: "'Red Hat Display', sans-serif", fontWeight: 800, fontSize: 20, color: "white", letterSpacing: 1 }}>UNIVERSITY OF WISCONSIN</div>
+              <div className="mb-6 md:mb-10" style={{ fontFamily: "'Red Hat Display', sans-serif", fontWeight: 800, fontSize: 20, color: "white", letterSpacing: 1 }}>STATE UNIVERSITY</div>
               <h2 style={{ fontFamily: "'Red Hat Display', sans-serif", fontSize: "clamp(28px, 4vw, 40px)", fontWeight: 700, color: "white", lineHeight: 1.15, marginBottom: 16 }}>Welcome.</h2>
-              <p style={{ fontSize: 16, color: "rgba(255,255,255,0.7)", lineHeight: 1.6, maxWidth: 360 }}>Your AI tutor is ready. Sign in to start a voice session, review past conversations, or track your learning progress.</p>
+              <p style={{ fontSize: 16, color: "rgba(255,255,255,0.85)", lineHeight: 1.6, maxWidth: 360 }}>Your Academic Command Center is ready. Sign in to upload a syllabus, start a voice session, or check your engagement score.</p>
             </div>
           </div>
           <div className="p-6 md:p-14 flex flex-col justify-center" style={{ background: "white" }}>
@@ -718,7 +752,7 @@ export default function AuthPage() {
                   <FormField control={loginForm.control} name="email" render={({ field }) => (
                     <FormItem>
                       <FormLabel style={{ fontSize: 13, fontWeight: 600, color: "#3E3D3F" }}>Email</FormLabel>
-                      <FormControl><Input placeholder="student@wisc.edu" {...field} className="h-11 md:h-12 rounded-lg" /></FormControl>
+                      <FormControl><Input placeholder="student@state.edu" {...field} className="h-11 md:h-12 rounded-lg" /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -769,7 +803,7 @@ export default function AuthPage() {
                   <FormField control={registerForm.control} name="email" render={({ field }) => (
                     <FormItem>
                       <FormLabel style={{ fontSize: 13, fontWeight: 600, color: "#3E3D3F" }}>University Email</FormLabel>
-                      <FormControl><Input placeholder="student@wisc.edu" {...field} className="h-11 rounded-lg" onChange={(e) => { field.onChange(e); registerForm.setValue("studentName", registerForm.getValues("accountName") || "Student"); }} /></FormControl>
+                      <FormControl><Input placeholder="student@state.edu" {...field} className="h-11 rounded-lg" onChange={(e) => { field.onChange(e); registerForm.setValue("studentName", registerForm.getValues("accountName") || "Student"); }} /></FormControl>
                       <FormMessage />
                     </FormItem>
                   )} />
@@ -791,7 +825,7 @@ export default function AuthPage() {
                     <FormItem>
                       <FormLabel style={{ fontSize: 13, fontWeight: 600, color: "#3E3D3F" }}>Access Code</FormLabel>
                       <FormControl>
-                        <Input placeholder="Enter your access code" {...field} className="h-11 rounded-lg font-mono uppercase tracking-wider" 
+                        <Input placeholder="Enter your access code" {...field} className="h-11 rounded-lg font-mono uppercase tracking-wider"
                           onChange={(e) => field.onChange(e.target.value.toUpperCase())} />
                       </FormControl>
                       <FormMessage />
@@ -812,8 +846,8 @@ export default function AuthPage() {
       {/* Footer */}
       <footer className="py-8 md:py-10 px-4 md:px-12 max-w-7xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4" style={{ borderTop: "1px solid #E8E8E8", background: "#FFFFFF" }}>
         <div className="flex items-center gap-3">
-          <img src={suLogo} alt="University of Wisconsin" className="h-8 object-contain" />
-          <span style={{ fontSize: 12, color: "#646569" }}>University of Wisconsin · AI Tutor Program</span>
+          <img src={suLogo} alt="State University" className="h-8 object-contain" />
+          <span style={{ fontSize: 12, color: "#646569" }}>State University · Academic SRM + AI Tutor</span>
         </div>
         <span style={{ fontSize: 11, color: "#DAD7CB" }}>Powered by JIE Mastery</span>
       </footer>
