@@ -1337,3 +1337,37 @@ export type StudentEngagementScore = typeof studentEngagementScores.$inferSelect
 export type InsertStudentEngagementScore = z.infer<typeof insertStudentEngagementScoreSchema>;
 export type StudentParentShare = typeof studentParentShares.$inferSelect;
 export type InsertStudentParentShare = z.infer<typeof insertStudentParentShareSchema>;
+
+// ============================================================================
+// notification_preferences — upcoming-work digest subscriptions
+// Off-by-default. User explicitly opts in via Study Tracker / Academic settings.
+// ============================================================================
+
+export const notificationPreferences = pgTable("notification_preferences", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  // childId unused on State — the user IS the student.
+  childId: varchar("child_id"),
+  recipientEmail: text("recipient_email").notNull(),
+  recipientName: text("recipient_name"),
+  recipientRole: text("recipient_role").$type<'self' | 'parent' | 'admin'>().notNull().default('self'),
+  frequency: text("frequency").$type<'off' | 'daily' | 'weekly'>().notNull().default('off'),
+  horizonDays: integer("horizon_days").notNull().default(7),
+  dayOfWeek: integer("day_of_week").notNull().default(0),
+  hourLocal: integer("hour_local").notNull().default(18),
+  timezone: text("timezone").notNull().default('America/New_York'),
+  atRiskAlerts: boolean("at_risk_alerts").notNull().default(false),
+  isActive: boolean("is_active").notNull().default(true),
+  lastSentAt: timestamp("last_sent_at"),
+  lastAtRiskSentAt: timestamp("last_at_risk_sent_at"),
+  unsubscribeToken: text("unsubscribe_token").notNull().default(sql`encode(gen_random_bytes(18), 'hex')`),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+}, (table) => [
+  index("idx_notif_prefs_user").on(table.userId),
+  index("idx_notif_prefs_child").on(table.childId),
+  uniqueIndex("idx_notif_prefs_unsub").on(table.unsubscribeToken),
+]);
+
+export type NotificationPreference = typeof notificationPreferences.$inferSelect;
+export type NewNotificationPreference = typeof notificationPreferences.$inferInsert;
