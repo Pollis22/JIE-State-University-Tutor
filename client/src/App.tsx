@@ -40,6 +40,7 @@ const BestPractices = lazy(() => import("@/pages/best-practices"));
 const LiveSupport = lazy(() => import("@/pages/live-support"));
 const ContactPage = lazy(() => import("@/pages/contact"));
 const AcademicDashboard = lazy(() => import("@/pages/academic-dashboard"));
+const StudentNotificationSettingsPage = lazy(() => import("@/pages/student-notification-settings"));
 const AdminAcademicTracker = lazy(() => import("@/pages/admin/admin-academic-tracker"));
 const SRMPage = lazy(() => import("@/pages/srm-page"));
 const TestSTTPage = lazy(() => import("@/pages/test-stt-page"));
@@ -65,6 +66,7 @@ function Router() {
         <ProtectedRoute path="/admin/logs" component={AdminLogs} />
         <ProtectedRoute path="/admin/academic-tracker" component={AdminAcademicTracker} />
         <ProtectedRoute path="/academic-dashboard" component={AcademicDashboard} />
+        <ProtectedRoute path="/academic-dashboard/notifications" component={StudentNotificationSettingsPage} />
         <LazyRoute path="/auth/registration-success" component={RegistrationSuccessPage} />
         <LazyRoute path="/forgot-password" component={ForgotPasswordPage} />
         <LazyRoute path="/reset-password" component={ResetPasswordPage} />

@@ -429,6 +429,9 @@ export default function AcademicDashboard() {
             </h1>
             <p className="text-muted-foreground mt-1">Manage your courses, calendar, and study plan</p>
           </div>
+          <Button variant="outline" onClick={() => setLocation("/academic-dashboard/notifications")}>
+            🔔 Notifications
+          </Button>
         </div>
 
         {/* Summary Cards */}
