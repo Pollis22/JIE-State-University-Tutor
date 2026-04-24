@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { MessageCircle, Mail, Book, HelpCircle } from "lucide-react";
+import { MessageCircle, Mail, Book, HelpCircle, Phone } from "lucide-react";
 import { useLocation } from "wouter";
 import { NavigationHeader } from "@/components/navigation-header";
 import { LiveChatWidget } from "@/components/LiveChatWidget";
@@ -10,6 +10,10 @@ export default function LiveSupport() {
   useEffect(() => {
     console.log("Live support page loaded with ElevenLabs agent");
   }, []);
+
+  const launchVoiceCall = () => {
+    window.dispatchEvent(new CustomEvent("open-live-chat"));
+  };
 
   return (
     <div className="min-h-screen bg-white">
@@ -38,11 +42,30 @@ export default function LiveSupport() {
             <h2 className="text-3xl font-bold mb-4" style={{ fontFamily: 'Red Hat Display, sans-serif' }}>
               Live Voice Support
             </h2>
-            <p className="text-lg mb-6">
+            <p className="text-lg mb-8">
               Talk with our AI support assistant for instant help with technical issues, account questions, or platform guidance.
             </p>
-            <p className="text-sm mb-6 text-white/90">
-              Click the phone icon in the bottom-right corner to start a voice conversation, or scroll down for FAQs.
+
+            {/* Prominent voice-call CTA — replaces the easy-to-miss floating-icon instruction */}
+            <div className="relative inline-block">
+              <span
+                className="absolute inset-0 rounded-full bg-white opacity-30 animate-ping"
+                aria-hidden="true"
+              />
+              <button
+                onClick={launchVoiceCall}
+                className="relative bg-white text-[#C5050C] px-10 py-5 rounded-full text-xl font-bold inline-flex items-center gap-3 shadow-xl hover:shadow-2xl transition-all transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-white/50"
+                style={{ fontFamily: "'Red Hat Display', sans-serif" }}
+                data-testid="button-launch-voice-call"
+                aria-label="Start voice call with support"
+              >
+                <Phone className="h-7 w-7" />
+                Start Voice Call
+              </button>
+            </div>
+
+            <p className="text-sm mt-6 text-white/90">
+              Available 24/7 — your browser will ask for microphone access when the call starts.
             </p>
           </div>
 

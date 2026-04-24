@@ -1,28 +1,25 @@
 import { useConversation } from '@elevenlabs/react';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { X, Phone, PhoneOff, Mic, MicOff, Volume2 } from 'lucide-react';
 
 /**
- * State University — Live Voice Support Widget
+ * State University — Live Voice Support Widget (v2)
  *
- * Voice-only UI. No text transcript. ElevenLabs conversational agent drives
- * the entire exchange through speech. Agent ID is supplied via env var so
- * the same build can ship to any institution without a code change.
+ * v2 change: listens for a window-level `open-live-chat` custom event so any
+ * page-level button can open the voice call without prop-drilling. The
+ * floating phone button still works the same way; this is additive.
  *
- * Required env var (Railway → Variables, frontend/Vite scope):
+ * Voice-only UI. No text transcript. Agent ID via env var:
  *   VITE_ELEVENLABS_SUPPORT_AGENT_ID=agent_xxxxxxxxxxxxxxxxx
  *
- * The widget renders a floating phone button bottom-right. On click it
- * requests mic access and starts the session. The popup shows connection
- * state, a pulsing mic (listening), a pulsing speaker (agent talking),
- * mute, and end-call controls. Nothing else.
+ * To trigger from anywhere:
+ *   window.dispatchEvent(new CustomEvent('open-live-chat'));
  */
 export function LiveChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Agent ID is injected at build time via Vite. Fail closed if missing.
   const agentId = import.meta.env.VITE_ELEVENLABS_SUPPORT_AGENT_ID as string | undefined;
 
   const conversation = useConversation({
@@ -79,8 +76,17 @@ export function LiveChatWidget() {
     setIsMuted((prev) => !prev);
   }, []);
 
-  // Hide widget entirely in prod if agent ID is missing (don't render the
-  // floating button at all, so non-configured environments look clean).
+  // v2: allow any page-level button to open the widget via custom event.
+  useEffect(() => {
+    const openHandler = () => {
+      if (!isOpen) {
+        void handleStart();
+      }
+    };
+    window.addEventListener('open-live-chat', openHandler);
+    return () => window.removeEventListener('open-live-chat', openHandler);
+  }, [handleStart, isOpen]);
+
   if (!agentId && !isOpen) {
     return null;
   }
@@ -88,14 +94,12 @@ export function LiveChatWidget() {
   const isConnected = conversation.status === 'connected';
   const isSpeaking = conversation.isSpeaking;
 
-  // Status line shown under the header
   let statusLabel = 'Connecting...';
   if (isConnected && isSpeaking) statusLabel = '● Speaking';
   else if (isConnected) statusLabel = '● Listening';
 
   return (
     <>
-      {/* Floating launcher button */}
       {!isOpen && (
         <button
           onClick={handleStart}
@@ -108,10 +112,8 @@ export function LiveChatWidget() {
         </button>
       )}
 
-      {/* Voice-only panel */}
       {isOpen && (
         <div className="fixed bottom-6 right-6 z-50 w-[360px] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-gray-200">
-          {/* Header */}
           <div
             className="text-white p-4 flex justify-between items-center"
             style={{ background: 'linear-gradient(135deg, #C5050C 0%, #A00409 100%)' }}
@@ -142,7 +144,6 @@ export function LiveChatWidget() {
             </button>
           </div>
 
-          {/* Voice visualizer — replaces the old text transcript area */}
           <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 px-6 py-10 min-h-[220px]">
             {error && (
               <div
@@ -209,7 +210,6 @@ export function LiveChatWidget() {
             )}
           </div>
 
-          {/* Controls */}
           <div className="p-4 bg-white border-t border-gray-100">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
