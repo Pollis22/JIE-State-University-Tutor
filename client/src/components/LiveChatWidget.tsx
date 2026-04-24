@@ -1,71 +1,63 @@
 import { useConversation } from '@elevenlabs/react';
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Phone, PhoneOff, Mic, MicOff } from 'lucide-react';
+import { useState, useCallback } from 'react';
+import { X, Phone, PhoneOff, Mic, MicOff, Volume2 } from 'lucide-react';
 
-interface Message {
-  role: 'user' | 'agent';
-  content: string;
-  timestamp: Date;
-}
-
+/**
+ * State University — Live Voice Support Widget
+ *
+ * Voice-only UI. No text transcript. ElevenLabs conversational agent drives
+ * the entire exchange through speech. Agent ID is supplied via env var so
+ * the same build can ship to any institution without a code change.
+ *
+ * Required env var (Railway → Variables, frontend/Vite scope):
+ *   VITE_ELEVENLABS_SUPPORT_AGENT_ID=agent_xxxxxxxxxxxxxxxxx
+ *
+ * The widget renders a floating phone button bottom-right. On click it
+ * requests mic access and starts the session. The popup shows connection
+ * state, a pulsing mic (listening), a pulsing speaker (agent talking),
+ * mute, and end-call controls. Nothing else.
+ */
 export function LiveChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  
-  // State University AI Tutor Support Agent ID
-  const agentId = 'agent_7601k9nzfad9e3c88n3hhdc2p80d';
+
+  // Agent ID is injected at build time via Vite. Fail closed if missing.
+  const agentId = import.meta.env.VITE_ELEVENLABS_SUPPORT_AGENT_ID as string | undefined;
 
   const conversation = useConversation({
     onConnect: () => {
-      console.log('[LiveChat] Connected to State University AI Tutor Support');
+      console.log('[LiveChat] Connected to State University Support');
       setError(null);
-      // First message comes from ElevenLabs agent configuration - don't add duplicate
     },
     onDisconnect: () => {
       console.log('[LiveChat] Disconnected');
     },
-    onMessage: (message) => {
-      console.log('[LiveChat] Message:', message);
-      if (message.message) {
-        setMessages(prev => [...prev, {
-          role: message.source === 'user' ? 'user' : 'agent',
-          content: message.message,
-          timestamp: new Date()
-        }]);
-      }
-    },
-    onError: (error) => {
-      console.error('[LiveChat] Error:', error);
+    onError: (err) => {
+      console.error('[LiveChat] Error:', err);
       setError('Connection error. Please try again.');
     },
   });
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
   const handleStart = useCallback(async () => {
     if (!agentId) {
-      console.error('[LiveChat] Missing agent ID');
-      setError('Chat not configured');
+      console.error('[LiveChat] VITE_ELEVENLABS_SUPPORT_AGENT_ID is not set');
+      setError('Voice support is not configured.');
+      setIsOpen(true);
       return;
     }
     setIsOpen(true);
-    setMessages([]);
     setError(null);
     try {
       await navigator.mediaDevices.getUserMedia({ audio: true });
-      await conversation.startSession({ 
+      await conversation.startSession({
         agentId,
-        connectionType: "webrtc"
+        connectionType: 'webrtc',
       });
     } catch (err) {
       console.error('[LiveChat] Failed to start:', err);
       if (err instanceof Error && err.name === 'NotAllowedError') {
-        setError('Microphone access denied. Please allow microphone access.');
+        setError('Microphone access denied. Please allow microphone access and try again.');
       } else {
         setError('Failed to connect. Please try again.');
       }
@@ -79,134 +71,171 @@ export function LiveChatWidget() {
       console.error('[LiveChat] Failed to end:', err);
     }
     setIsOpen(false);
-    setMessages([]);
+    setIsMuted(false);
     setError(null);
   }, [conversation]);
 
   const toggleMute = useCallback(() => {
-    setIsMuted(prev => !prev);
+    setIsMuted((prev) => !prev);
   }, []);
 
-  if (!agentId) {
+  // Hide widget entirely in prod if agent ID is missing (don't render the
+  // floating button at all, so non-configured environments look clean).
+  if (!agentId && !isOpen) {
     return null;
   }
 
+  const isConnected = conversation.status === 'connected';
+  const isSpeaking = conversation.isSpeaking;
+
+  // Status line shown under the header
+  let statusLabel = 'Connecting...';
+  if (isConnected && isSpeaking) statusLabel = '● Speaking';
+  else if (isConnected) statusLabel = '● Listening';
+
   return (
     <>
+      {/* Floating launcher button */}
       {!isOpen && (
         <button
           onClick={handleStart}
           className="fixed bottom-6 right-6 z-50 text-white rounded-full p-4 shadow-lg transition-all duration-200 hover:scale-105"
           style={{ background: '#C5050C' }}
-          aria-label="Start live chat"
+          aria-label="Start live voice support"
           data-testid="button-start-live-chat"
         >
           <Phone className="h-6 w-6" />
         </button>
       )}
 
+      {/* Voice-only panel */}
       {isOpen && (
-        <div className="fixed bottom-6 right-6 z-50 w-[380px] h-[550px] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-gray-200">
-          <div className="text-white p-4 flex justify-between items-center" style={{ background: 'linear-gradient(135deg, #C5050C 0%, #A00409 100%)' }}>
+        <div className="fixed bottom-6 right-6 z-50 w-[360px] bg-white rounded-2xl shadow-2xl flex flex-col overflow-hidden border border-gray-200">
+          {/* Header */}
+          <div
+            className="text-white p-4 flex justify-between items-center"
+            style={{ background: 'linear-gradient(135deg, #C5050C 0%, #A00409 100%)' }}
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
                 <Phone className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="font-semibold" style={{ fontFamily: "'Red Hat Display', sans-serif" }}>State University AI Tutor Support</h3>
+                <h3
+                  className="font-semibold"
+                  style={{ fontFamily: "'Red Hat Display', sans-serif" }}
+                >
+                  Live Voice Support
+                </h3>
                 <p className="text-xs" style={{ color: 'rgba(255,255,255,0.9)' }}>
-                  {conversation.status === 'connected' ? '● Live' : 'Connecting...'}
+                  {statusLabel}
                 </p>
               </div>
             </div>
-            <button 
+            <button
               onClick={handleEnd}
               className="hover:bg-white/20 rounded-full p-2 transition-colors"
-              aria-label="Close chat"
+              aria-label="Close voice support"
               data-testid="button-close-chat"
             >
               <X className="h-5 w-5" />
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 bg-gray-50 space-y-3">
+          {/* Voice visualizer — replaces the old text transcript area */}
+          <div className="flex-1 flex flex-col items-center justify-center bg-gray-50 px-6 py-10 min-h-[220px]">
             {error && (
-              <div className="border px-4 py-2 rounded-lg text-sm" style={{ background: '#FEE2E2', borderColor: '#FCA5A5', color: '#991B1B' }}>
+              <div
+                className="w-full border px-4 py-3 rounded-lg text-sm mb-4 text-center"
+                style={{ background: '#FEE2E2', borderColor: '#FCA5A5', color: '#991B1B' }}
+              >
                 {error}
               </div>
             )}
 
-            {messages.length === 0 && !error && (
-              <div className="text-center text-gray-400 py-8">
-                <Mic className="h-8 w-8 mx-auto mb-2 animate-pulse" />
-                <p>Start speaking to chat with our AI support</p>
-              </div>
-            )}
-            
-            {messages.map((msg, index) => (
-              <div
-                key={index}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
+            {!error && !isConnected && (
+              <div className="flex flex-col items-center text-gray-500">
                 <div
-                  className={`max-w-[80%] rounded-2xl px-4 py-2 ${
-                    msg.role === 'user'
-                      ? 'text-white rounded-br-md'
-                      : 'bg-white text-gray-800 shadow-sm border border-gray-100 rounded-bl-md'
-                  }`}
-                  style={msg.role === 'user' ? { background: '#C5050C' } : {}}
+                  className="w-20 h-20 rounded-full flex items-center justify-center mb-4 animate-pulse"
+                  style={{ background: '#FEE2E2' }}
                 >
-                  <p className="text-sm">{msg.content}</p>
-                  <p className={`text-xs mt-1 ${
-                    msg.role === 'user' ? 'opacity-80' : 'text-gray-400'
-                  }`}>
-                    {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </p>
+                  <Phone className="h-8 w-8" style={{ color: '#C5050C' }} />
                 </div>
-              </div>
-            ))}
-            
-            {conversation.isSpeaking && (
-              <div className="flex justify-start">
-                <div className="bg-white rounded-2xl px-4 py-2 shadow-sm border border-gray-100">
-                  <div className="flex items-center gap-1">
-                    <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: '#C5050C', animationDelay: '0ms' }} />
-                    <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: '#C5050C', animationDelay: '150ms' }} />
-                    <div className="w-2 h-2 rounded-full animate-bounce" style={{ background: '#C5050C', animationDelay: '300ms' }} />
-                  </div>
-                </div>
+                <p className="text-sm">Connecting...</p>
               </div>
             )}
-            
-            <div ref={messagesEndRef} />
+
+            {!error && isConnected && !isSpeaking && (
+              <div className="flex flex-col items-center text-gray-700">
+                <div
+                  className="w-24 h-24 rounded-full flex items-center justify-center mb-4 relative"
+                  style={{ background: 'rgba(197,5,12,0.1)' }}
+                >
+                  <span
+                    className="absolute inset-0 rounded-full animate-ping"
+                    style={{ background: 'rgba(197,5,12,0.25)' }}
+                  />
+                  <Mic className="h-10 w-10 relative" style={{ color: '#C5050C' }} />
+                </div>
+                <p className="text-sm font-medium">I'm listening...</p>
+                <p className="text-xs text-gray-500 mt-1">Just start talking</p>
+              </div>
+            )}
+
+            {!error && isConnected && isSpeaking && (
+              <div className="flex flex-col items-center text-gray-700">
+                <div
+                  className="w-24 h-24 rounded-full flex items-center justify-center mb-4"
+                  style={{ background: 'rgba(197,5,12,0.1)' }}
+                >
+                  <Volume2 className="h-10 w-10" style={{ color: '#C5050C' }} />
+                </div>
+                <div className="flex items-center gap-1 mb-2">
+                  <div
+                    className="w-2 h-2 rounded-full animate-bounce"
+                    style={{ background: '#C5050C', animationDelay: '0ms' }}
+                  />
+                  <div
+                    className="w-2 h-2 rounded-full animate-bounce"
+                    style={{ background: '#C5050C', animationDelay: '150ms' }}
+                  />
+                  <div
+                    className="w-2 h-2 rounded-full animate-bounce"
+                    style={{ background: '#C5050C', animationDelay: '300ms' }}
+                  />
+                </div>
+                <p className="text-sm font-medium">Agent is speaking...</p>
+              </div>
+            )}
           </div>
 
+          {/* Controls */}
           <div className="p-4 bg-white border-t border-gray-100">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <button
                   onClick={toggleMute}
                   className={`p-2 rounded-full transition-colors ${
-                    isMuted 
-                      ? 'text-white' 
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    isMuted ? 'text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                   style={isMuted ? { background: '#C5050C' } : {}}
+                  aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
                   data-testid="button-toggle-mute"
+                  disabled={!isConnected}
                 >
                   {isMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                 </button>
                 <span className="text-sm text-gray-500">
-                  {conversation.isSpeaking ? 'Listening...' : 'Tap to mute'}
+                  {isMuted ? 'Muted' : 'Tap to mute'}
                 </span>
               </div>
-              
+
               <button
                 onClick={handleEnd}
                 className="flex items-center gap-2 px-4 py-2 rounded-full transition-colors"
                 style={{ background: '#FEE2E2', color: '#C5050C' }}
-                onMouseEnter={(e) => e.currentTarget.style.background = '#FCA5A5'}
-                onMouseLeave={(e) => e.currentTarget.style.background = '#FEE2E2'}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#FCA5A5')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = '#FEE2E2')}
                 data-testid="button-end-call"
               >
                 <PhoneOff className="h-4 w-4" />
