@@ -481,3 +481,46 @@ export function startUpcomingDigestJob() {
 }
 
 export { runUpcomingDigestTick as sendUpcomingDigests };
+
+/**
+ * Preview — send a digest to a single preference right now, bypassing the
+ * time-window + "nothing due" gates so users can see what the email looks like.
+ */
+export async function runPreviewForPreference(prefId: string): Promise<{ ok: boolean; reason: string }> {
+  const { rows } = await pool.query<PrefRow>(
+    `SELECT id, user_id, child_id, recipient_email, recipient_name, recipient_role,
+            frequency, horizon_days, day_of_week, hour_local, timezone,
+            at_risk_alerts, is_active, last_sent_at, last_at_risk_sent_at,
+            unsubscribe_token
+       FROM notification_preferences WHERE id = $1 LIMIT 1`,
+    [prefId]
+  );
+  const pref = rows[0];
+  if (!pref) return { ok: false, reason: 'not-found' };
+
+  const { date: todayLocal } = currentHourInTimezone(pref.timezone);
+  const student = await loadStudent(pref.user_id);
+  const studentName = student?.name || 'your student';
+  const items = await loadUpcomingItems(pref.user_id, pref.horizon_days, todayLocal);
+
+  const renderedFreq = (pref.frequency === 'off' ? 'weekly' : pref.frequency) as 'daily' | 'weekly';
+  const { subject, html } = renderDigestEmail({
+    studentName,
+    frequency: renderedFreq,
+    horizonDays: pref.horizon_days,
+    items, // may be empty — preview still renders
+    unsubscribeToken: pref.unsubscribe_token,
+  });
+
+  try {
+    await emailService.sendEmail({
+      to: pref.recipient_email,
+      subject: `[PREVIEW] ${subject}`,
+      html,
+    });
+    return { ok: true, reason: 'sent' };
+  } catch (err: any) {
+    console.error('[UpcomingDigest] preview send failed', prefId, err?.message || err);
+    return { ok: false, reason: 'send-failed' };
+  }
+}
