@@ -106,6 +106,9 @@ export default function AuthPage() {
   const [showRegisterPassword, setShowRegisterPassword] = useState(false);
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"login" | "register">("login");
+  // Registration is disabled institution-wide. Accounts are provisioned by the admin.
+  // To re-enable self-service signup (with access codes), flip this to true.
+  const REGISTRATION_ENABLED = false;
   const [resendCooldown, setResendCooldown] = useState(0);
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -122,7 +125,7 @@ export default function AuthPage() {
   }, [resendCooldown]);
 
   useEffect(() => {
-    if (actionParam === "register") setActiveTab("register");
+    if (actionParam === "register" && REGISTRATION_ENABLED) setActiveTab("register");
   }, [actionParam]);
 
   useEffect(() => {
@@ -341,10 +344,10 @@ export default function AuthPage() {
               </p>
 
               <div className="flex flex-col sm:flex-row gap-3 mb-6">
-                <Button onClick={() => { setActiveTab("register"); document.getElementById("auth-section")?.scrollIntoView({ behavior: "smooth" }); }}
+                <Button onClick={() => { setActiveTab(REGISTRATION_ENABLED ? "register" : "login"); document.getElementById("auth-section")?.scrollIntoView({ behavior: "smooth" }); }}
                   className="text-white font-semibold px-7 py-3 rounded-lg text-base flex items-center justify-center gap-2"
                   style={{ background: "#C5050C", boxShadow: "0 4px 20px rgba(197,5,12,0.3)" }}>
-                  Claim Your Command Center <ArrowRight className="w-4 h-4" />
+                  {REGISTRATION_ENABLED ? "Claim Your Command Center" : "Sign In"} <ArrowRight className="w-4 h-4" />
                 </Button>
                 <Button onClick={() => setLocation("/srm")}
                   variant="outline"
@@ -738,15 +741,24 @@ export default function AuthPage() {
                 <p className="text-sm font-semibold" style={{ color: "#1B5E20" }}>Email verified! You can now sign in.</p>
               </div>
             )}
-            <div className="flex mb-6 md:mb-8 rounded-lg p-1" style={{ background: "#F3F3F3" }}>
-              {(["login", "register"] as const).map(tab => (
-                <button key={tab} onClick={() => { setActiveTab(tab); loginForm.reset(); registerForm.reset(); }} className="flex-1 py-2.5 rounded-md text-sm font-semibold transition-all"
-                  style={{ background: activeTab === tab ? "white" : "transparent", color: activeTab === tab ? "#282728" : "#646569", boxShadow: activeTab === tab ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}>
-                  {tab === "login" ? "Sign In" : "Create Account"}
-                </button>
-              ))}
-            </div>
-            {activeTab === "login" ? (
+            {REGISTRATION_ENABLED ? (
+              <div className="flex mb-6 md:mb-8 rounded-lg p-1" style={{ background: "#F3F3F3" }}>
+                {(["login", "register"] as const).map(tab => (
+                  <button key={tab} onClick={() => { setActiveTab(tab); loginForm.reset(); registerForm.reset(); }} className="flex-1 py-2.5 rounded-md text-sm font-semibold transition-all"
+                    style={{ background: activeTab === tab ? "white" : "transparent", color: activeTab === tab ? "#282728" : "#646569", boxShadow: activeTab === tab ? "0 1px 3px rgba(0,0,0,0.08)" : "none" }}>
+                    {tab === "login" ? "Sign In" : "Create Account"}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="mb-6 md:mb-8 text-center">
+                <h2 className="text-2xl font-bold" style={{ color: "#282728" }}>Sign In</h2>
+                <p className="text-sm mt-2" style={{ color: "#646569" }}>
+                  Need an account? Contact your administrator.
+                </p>
+              </div>
+            )}
+            {(activeTab === "login" || !REGISTRATION_ENABLED) ? (
               <Form {...loginForm} key="login-form">
                 <form onSubmit={loginForm.handleSubmit(handleLogin)} className="space-y-4 md:space-y-5">
                   <FormField control={loginForm.control} name="email" render={({ field }) => (
