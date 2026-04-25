@@ -64,6 +64,7 @@ export function NavigationHeader() {
     { label: "Tutor", path: "/tutor" },
     { label: "Dashboard", path: "/dashboard" },
     { label: "Academic SRM", path: "/academic-dashboard" },
+    { label: "What is LSIS?", path: "/about-lsis" },
     { label: "Features", path: "/features" },
     { label: "College Test Prep", path: "/features#test-prep" },
     { label: "Best Practices", path: "/best-practices" },
