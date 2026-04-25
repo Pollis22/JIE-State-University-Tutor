@@ -46,10 +46,8 @@ export function NavigationHeader() {
     if (path.includes("#")) {
       const [basePath, hash] = path.split("#");
       if (location === basePath) {
-        // Already on the page, just scroll to the anchor
         document.getElementById(hash)?.scrollIntoView({ behavior: "smooth" });
       } else {
-        // Navigate to the page, then scroll after a short delay
         setLocation(basePath);
         setTimeout(() => {
           document.getElementById(hash)?.scrollIntoView({ behavior: "smooth" });
@@ -75,29 +73,29 @@ export function NavigationHeader() {
 
   return (
     <nav style={{ background: "#FFFFFF", borderBottom: "1px solid #E8E8E8", position: "sticky", top: 0, zIndex: 50 }}>
-      {/* Red top bar */}
+      {/* Cardinal red top bar */}
       <div style={{ height: 4, background: "#C5050C" }} />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
+        <div className="flex items-center justify-between h-16 gap-3">
           {/* Logo */}
-          <div className="flex items-center gap-4 cursor-pointer" onClick={() => setLocation("/tutor")}>
-            <img src={suLogo} alt="State University" style={{ height: 48 }} />
-            <div style={{ borderLeft: "1px solid #DAD7CB", paddingLeft: 12 }}>
-              <div style={{ fontFamily: "'Red Hat Display', sans-serif", fontWeight: 700, fontSize: 16, color: "#282728", lineHeight: 1.1 }}>AI Tutor</div>
-              <div style={{ fontSize: 10, color: "#646569", fontWeight: 500, letterSpacing: 1, textTransform: "uppercase" }}>State University</div>
+          <div className="flex items-center gap-3 cursor-pointer flex-shrink-0" onClick={() => setLocation("/tutor")}>
+            <img src={suLogo} alt="State University" style={{ height: 44 }} />
+            <div className="hidden sm:block" style={{ borderLeft: "1px solid #DAD7CB", paddingLeft: 12 }}>
+              <div style={{ fontFamily: "'Red Hat Display', sans-serif", fontWeight: 700, fontSize: 15, color: "#282728", lineHeight: 1.1, whiteSpace: "nowrap" }}>AI Tutor</div>
+              <div style={{ fontSize: 9, color: "#646569", fontWeight: 500, letterSpacing: 1, textTransform: "uppercase", whiteSpace: "nowrap" }}>State University</div>
             </div>
           </div>
 
           {/* Desktop Nav Links */}
-          <div className="hidden md:flex items-center gap-1">
+          <div className="hidden lg:flex items-center gap-0.5 xl:gap-1 flex-1 justify-center min-w-0">
             {navLinks.map(item => (
               <button
                 key={item.path}
                 onClick={() => navigateTo(item.path)}
                 style={{
-                  padding: "6px 14px",
+                  padding: "6px 10px",
                   borderRadius: 6,
-                  fontSize: 14,
+                  fontSize: 13,
                   fontWeight: isActive(item.path) ? 600 : 500,
                   color: isActive(item.path) ? "#C5050C" : "#646569",
                   background: isActive(item.path) ? "rgba(197,5,12,0.06)" : "transparent",
@@ -105,6 +103,7 @@ export function NavigationHeader() {
                   cursor: "pointer",
                   fontFamily: "'Red Hat Text', sans-serif",
                   transition: "all 0.15s",
+                  whiteSpace: "nowrap",
                 }}
               >
                 {item.label}
@@ -113,13 +112,12 @@ export function NavigationHeader() {
           </div>
 
           {/* Right side: User Menu + Mobile Hamburger */}
-          <div className="flex items-center gap-2">
-            {/* User Avatar Dropdown (always visible) */}
+          <div className="flex items-center gap-2 flex-shrink-0">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="flex items-center gap-2 px-2">
                   <UserAvatar name={displayName} size="sm" />
-                  <span className="hidden sm:inline text-sm font-medium" style={{ color: "#282728" }}>{displayName}</span>
+                  <span className="hidden md:inline text-sm font-medium whitespace-nowrap max-w-[120px] truncate" style={{ color: "#282728" }}>{displayName}</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
@@ -141,9 +139,8 @@ export function NavigationHeader() {
               </DropdownMenuContent>
             </DropdownMenu>
 
-            {/* Mobile hamburger (visible below md) */}
             <button
-              className="md:hidden p-2 rounded-md"
+              className="lg:hidden p-2 rounded-md"
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               style={{ border: "1px solid #E8E8E8", background: "transparent" }}
             >
@@ -155,7 +152,7 @@ export function NavigationHeader() {
 
       {/* Mobile dropdown menu */}
       {mobileMenuOpen && (
-        <div className="md:hidden" style={{ borderTop: "1px solid #E8E8E8", background: "#FFFFFF" }}>
+        <div className="lg:hidden" style={{ borderTop: "1px solid #E8E8E8", background: "#FFFFFF" }}>
           <div className="px-4 py-3 space-y-1">
             {navLinks.map(item => (
               <button

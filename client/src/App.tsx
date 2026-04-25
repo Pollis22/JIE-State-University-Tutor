@@ -68,7 +68,7 @@ function Router() {
         <ProtectedRoute path="/admin/academic-tracker" component={AdminAcademicTracker} />
         <ProtectedRoute path="/academic-dashboard" component={AcademicDashboard} />
         <ProtectedRoute path="/academic-dashboard/notifications" component={StudentNotificationSettingsPage} />
-        <ProtectedRoute path="/about-lsis" component={AboutLSISPage} />
+        <LazyRoute path="/about-lsis" component={AboutLSISPage} />
         <LazyRoute path="/auth/registration-success" component={RegistrationSuccessPage} />
         <LazyRoute path="/forgot-password" component={ForgotPasswordPage} />
         <LazyRoute path="/reset-password" component={ResetPasswordPage} />
