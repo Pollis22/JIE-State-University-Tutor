@@ -4022,6 +4022,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Public config endpoint — returns this school's support agent ID for the
+  // Mobile app to use when this school is selected. The agent ID is already
+  // visible in the browser bundle on the school's own site, so no auth needed.
+  app.get("/api/config/support-agent", (_req, res) => {
+    res.status(200).json({
+      supportAgentId: process.env.VITE_ELEVENLABS_SUPPORT_AGENT_ID || ''
+    });
+  });
+
   const httpServer = createServer(app);
   
   return httpServer;
