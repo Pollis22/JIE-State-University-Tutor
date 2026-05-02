@@ -59,7 +59,7 @@ function PhotoCollage() {
       <div className="max-w-4xl mx-auto grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
         <div className="col-span-2 rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.01]"
           style={{ border: "3px solid white", boxShadow: "0 12px 40px rgba(0,0,0,0.12)" }}>
-          <img src={bascomHall} alt="State University campus" className="w-full h-48 md:h-64 object-cover" />
+          <img src={bascomHall} alt="State University campus" className="w-full h-64 md:h-[28rem] object-cover" style={{ objectPosition: "center 35%" }} />
           <div style={{ height: 4, background: "#C5050C" }} />
         </div>
 
