@@ -58,35 +58,35 @@ function PhotoCollage() {
 
       <div className="max-w-4xl mx-auto grid grid-cols-2 md:grid-cols-3 gap-3 md:gap-4">
         <div className="col-span-2 rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.01]"
-          style={{ border: "3px solid white", boxShadow: "0 12px 40px rgba(0,0,0,0.12)", transform: "rotate(-1deg)" }}>
+          style={{ border: "3px solid white", boxShadow: "0 12px 40px rgba(0,0,0,0.12)" }}>
           <img src={bascomHall} alt="State University campus" className="w-full h-48 md:h-64 object-cover" />
           <div style={{ height: 4, background: "#C5050C" }} />
         </div>
 
         <div className="rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.03]"
-          style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(2deg)" }}>
+          style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(-1deg)" }}>
           <img src={buckyClassroom} alt="Students in classroom" className="w-full h-48 md:h-64 object-cover" />
         </div>
 
         <div className="rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.03]"
-          style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(-1.5deg)" }}>
+          style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(-1deg)" }}>
           <img src={buckyBasketball} alt="Students at sports event" className="w-full h-36 md:h-48 object-cover" />
         </div>
 
         <div className="rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.03]"
-          style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(1.5deg)" }}>
+          style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)" }}>
           <img src={buckyFootball} alt="Students at sports event" className="w-full h-36 md:h-48 object-cover" />
         </div>
 
         <div className="rounded-xl overflow-hidden shadow-lg transition-transform duration-300 hover:scale-[1.03]"
-          style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(-2deg)" }}>
+          style={{ border: "3px solid white", boxShadow: "0 8px 25px rgba(0,0,0,0.1)", transform: "rotate(1deg)" }}>
           <img src={buckyLecture} alt="Students in lecture hall" className="w-full h-36 md:h-48 object-cover" />
         </div>
       </div>
 
       <div className="max-w-4xl mx-auto mt-6 md:mt-8">
         <div className="mx-auto px-5 py-3.5 rounded-xl shadow-md inline-block"
-          style={{ background: "rgba(255,255,255,0.95)", border: "1px solid rgba(197,5,12,0.12)", transform: "rotate(-0.5deg)", borderLeft: "3px solid #C5050C" }}>
+          style={{ background: "rgba(255,255,255,0.95)", border: "1px solid rgba(197,5,12,0.12)", borderLeft: "3px solid #C5050C" }}>
           <p style={{ fontFamily: "'Red Hat Text', sans-serif", fontSize: 14, fontStyle: "italic", color: "#282728", lineHeight: 1.5, fontWeight: 500 }}>
             "It's not just a tutor — it knows my whole semester. Every deadline, every exam, every gap. Game changer."
           </p>
@@ -369,7 +369,7 @@ export default function AuthPage() {
             <div className="flex justify-center items-center">
               <div className="relative w-full max-w-md">
                 <div className="rounded-2xl overflow-hidden shadow-2xl"
-                  style={{ transform: "rotate(1.5deg)", border: "4px solid white", boxShadow: "0 20px 50px rgba(0,0,0,0.14)" }}>
+                  style={{ border: "4px solid white", boxShadow: "0 20px 50px rgba(0,0,0,0.14)" }}>
                   <img src={buckyGraduation} alt="Students celebrating graduation" className="w-full h-auto" />
                 </div>
                 <div className="absolute rounded-lg overflow-hidden shadow-xl hidden md:block"
